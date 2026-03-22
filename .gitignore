@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Node/Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Go/Backend
+backend/optiyoo-backend
+vendor/
+.env
+
+# Agents
+.agents/
+.gemini/

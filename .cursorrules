@@ -1,0 +1,31 @@
+# Optiyoo Survey Platform - AI Context & Guidelines
+
+*This `.cursorrules` file provides critical onboard framing for all general AI coding assistants to prevent redundant codebase scanning when beginning new tasks.*
+
+## Tech Stack
+- **Backend:** Go 1.22+ (net/http, vanilla standard library routing, no external web frameworks)
+- **Frontend:** Vue 3 (Composition API, `<script setup>`), TypeScript, Vite, Vue Router, Pinia
+- **Database:** PostgreSQL (`lib/pq` driver)
+- **Styling:** Vanilla CSS (Design system inspired by "A Dictionary of Color Combinations", Combo #109)
+
+## Project Architecture
+This is a Monorepo.
+- `/backend/`: Go API server running on port 8080.
+  - Generates secure IDs using `crypto/rand` (8-byte hex) under `auth.go`.
+  - Enforces mandatory single-question logic limit (`survey.go`).
+  - Computes `vote_count` using nested SQL queries (`survey.go`) to natively return poll results array in API JSON.
+- `/frontend/`: Vue 3 application running on port 5173.
+  - Deep localStorage integration via Pinia store (`optiyoo_user`, `completed_polls_usrId`).
+  - Fetches `/api/surveys` to natively render Twitter-like Poll UI with horizontal CSS percentage bars directly onto the Radio labels.
+  - Uses `v-model` for instant visual execution and 1-click answers instead of conventional forms.
+
+## Core Business Requirements
+1. **Single Question Policy:** Every created survey is essentially a "Poll" (1 question strictly enforced). 
+2. **Open-Ended Restriction:** The config variable `config.AppConfig.AllowOpenEndedQuestions` is set to `false`. Frontend hits `/api/config` to dynamically lock the text question builder.
+3. **No Duplicate Voting:** Backend DB uniquely prevents duplicate SQL rows for answers with twin `survey_id` + `user_id`. Frontend catches `403` to persistently lock poll UI.
+4. **Reward System:** Submitting a poll answer awards `+5 OPT` to the user's Points balance in Postgres.
+
+## Common Operations
+- **Start DB:** `docker-compose up -d` (Postgres on 5432)
+- **Start Backend:** `cd backend && go run .`
+- **Start Frontend:** `cd frontend && npm run dev`
