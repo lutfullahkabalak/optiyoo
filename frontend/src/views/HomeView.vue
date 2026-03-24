@@ -7,8 +7,8 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const isLoginMode = ref(true)
-const email = ref('')
-const password = ref('')
+const email = ref('test3@test.com')
+const password = ref('123')
 const name = ref('')
 const errorMessage = ref('')
 const isLoading = ref(false)
@@ -43,7 +43,7 @@ const handleAuth = async () => {
     
     const data = await res.json()
     authStore.setUser(data)
-    router.push('/dashboard')
+    router.push('/')
     
   } catch (e: any) {
     errorMessage.value = e.message
@@ -59,7 +59,7 @@ const handleAuth = async () => {
       <div class="container flex justify-between items-center header-inner">
         <div class="logo">optiyoo</div>
         <nav class="nav">
-          <button class="btn btn-outline" style="margin-right: 8px;" @click="isLoginMode = true">Giriş Yap</button>
+          <button class="btn btn-outline" style="margin-right: var(--spacing-3);" @click="isLoginMode = true">Giriş Yap</button>
           <button class="btn btn-primary" @click="isLoginMode = false">Kaydol</button>
         </nav>
       </div>
@@ -91,7 +91,7 @@ const handleAuth = async () => {
             <label class="form-label">Şifre</label>
             <input type="password" v-model="password" class="form-control" placeholder="••••••••" required />
           </div>
-          <button class="btn btn-primary" :disabled="isLoading" style="width: 100%; margin-top: var(--spacing-2);">
+          <button class="btn btn-primary" :disabled="isLoading" style="width: 100%; margin-top: var(--spacing-4);">
             {{ isLoading ? 'İşleniyor...' : (isLoginMode ? 'Giriş Yap' : 'Kayıt Ol') }}
           </button>
         </form>

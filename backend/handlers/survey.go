@@ -12,7 +12,7 @@ import (
 // GetSurveysHandler lists all active surveys GET /api/surveys
 func GetSurveysHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
-	rows, err := db.DB.Query("SELECT id, title, description, creator_id, created_at FROM surveys WHERE is_active = TRUE ORDER BY created_at DESC")
+	rows, err := db.DB.Query("SELECT s.id, s.creator_id, COALESCE(u.name, ''), s.created_at FROM surveys s LEFT JOIN users u ON u.id = s.creator_id WHERE s.is_active = TRUE ORDER BY s.created_at DESC")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -22,7 +22,7 @@ func GetSurveysHandler(w http.ResponseWriter, r *http.Request) {
 	var surveys []models.Survey
 	for rows.Next() {
 		var s models.Survey
-		if err := rows.Scan(&s.ID, &s.Title, &s.Description, &s.CreatorID, &s.CreatedAt); err == nil {
+		if err := rows.Scan(&s.ID, &s.CreatorID, &s.CreatorName, &s.CreatedAt); err == nil {
 			// Yükleme (Join mantığı)
 			qRows, _ := db.DB.Query("SELECT id, type, text, q_order FROM questions WHERE survey_id = $1 ORDER BY q_order", s.ID)
 			for qRows.Next() {
@@ -65,10 +65,11 @@ func GetSurveysHandler(w http.ResponseWriter, r *http.Request) {
 // GetSurveyHandler returns a specific survey with its nested questions GET /api/surveys/{id}
 func GetSurveyHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	userID := r.URL.Query().Get("user_id")
 
 	var s models.Survey
-	err := db.DB.QueryRow("SELECT id, title, description, creator_id, created_at FROM surveys WHERE id = $1", id).
-		Scan(&s.ID, &s.Title, &s.Description, &s.CreatorID, &s.CreatedAt)
+	err := db.DB.QueryRow("SELECT s.id, s.creator_id, COALESCE(u.name, ''), s.created_at FROM surveys s LEFT JOIN users u ON u.id = s.creator_id WHERE s.id = $1", id).
+		Scan(&s.ID, &s.CreatorID, &s.CreatorName, &s.CreatedAt)
 
 	if err != nil {
 		http.Error(w, "Anket bulunamadı", http.StatusNotFound)
@@ -92,6 +93,14 @@ func GetSurveyHandler(w http.ResponseWriter, r *http.Request) {
 			oRows.Close()
 		}
 		s.Questions = append(s.Questions, q)
+	}
+
+	if userID != "" {
+		var userAnswer string
+		err := db.DB.QueryRow("SELECT value FROM answers WHERE survey_id = $1 AND user_id = $2", s.ID, userID).Scan(&userAnswer)
+		if err == nil && userAnswer != "" {
+			s.UserAnswer = &userAnswer
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -128,13 +137,9 @@ func SubmitAnswersHandler(w http.ResponseWriter, r *http.Request) {
 			ans.ID, surveyID, ans.QuestionID, payload.UserID, ans.Value, ans.CreatedAt)
 	}
 
-	if payload.UserID != "" {
-		db.DB.Exec("UPDATE users SET points = points + 5 WHERE id = $1", payload.UserID)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"message": "Anket başarıyla gönderildi, 5 OPT puanı kazandınız!"}`))
+	w.Write([]byte(`{"message": "Anket başarıyla gönderildi!"}`))
 }
 
 // CreateSurveyHandler Handles POST /api/surveys
@@ -167,8 +172,8 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx.Exec("INSERT INTO surveys (id, title, description, creator_id, created_at, is_active) VALUES ($1, $2, $3, $4, $5, $6)",
-		s.ID, s.Title, s.Description, s.CreatorID, s.CreatedAt, s.IsActive)
+	_, err = tx.Exec("INSERT INTO surveys (id, creator_id, created_at, is_active) VALUES ($1, $2, $3, $4)",
+		s.ID, s.CreatorID, s.CreatedAt, s.IsActive)
 	if err != nil {
 		tx.Rollback()
 		http.Error(w, "Anket kaydedilemedi", http.StatusInternalServerError)

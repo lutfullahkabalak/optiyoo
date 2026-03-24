@@ -5,24 +5,19 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
-      path: '/',
-      name: 'home',
+      path: '/auth',
+      name: 'auth',
       component: HomeView
     },
     {
-      path: '/dashboard',
+      path: '/',
       name: 'dashboard',
       component: () => import('../views/DashboardView.vue')
     },
     {
-      path: '/survey/:id',
+      path: '/s/:id',
       name: 'survey',
       component: () => import('../views/SurveyView.vue')
-    },
-    {
-      path: '/create-survey',
-      name: 'create-survey',
-      component: () => import('../views/CreateSurveyView.vue')
     }
   ]
 })

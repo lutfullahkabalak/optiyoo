@@ -5,7 +5,7 @@ export const useAuthStore = defineStore('auth', () => {
   const storedUser = localStorage.getItem('optiyoo_user')
   const initialUser = storedUser ? JSON.parse(storedUser) : null
 
-  const user = ref<{ id: string, name: string, email: string, points: number } | null>(initialUser)
+  const user = ref<{ id: string, name: string, email: string } | null>(initialUser)
   const isAuthenticated = ref(!!initialUser)
 
   const setUser = (userData: any) => {

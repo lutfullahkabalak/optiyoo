@@ -8,16 +8,14 @@ type User struct {
 	Email     string    `json:"email"`
 	Password  string    `json:"password,omitzero"` // Yalnızca istekte alınır, DB'ye yazılır, yanıtta boşaltılarak dışarı sızdırılmaz
 	Name      string    `json:"name"`
-	Points    int       `json:"points"` // Ödül sistemi / anket çözme puanları
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
 // Survey represents a single survey form
 type Survey struct {
 	ID          string     `json:"id,omitzero"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
 	CreatorID   string     `json:"creator_id"` // Anket oluşturan kullanıcının ID'si
+	CreatorName string     `json:"creator_name,omitempty"`
 	Questions   []Question `json:"questions,omitzero"`
 	UserAnswer  *string    `json:"user_answer,omitempty"`
 	CreatedAt   time.Time  `json:"created_at,omitzero"`

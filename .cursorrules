@@ -3,10 +3,10 @@
 *This `.cursorrules` file provides critical onboard framing for all general AI coding assistants to prevent redundant codebase scanning when beginning new tasks.*
 
 ## Tech Stack
-- **Backend:** Go 1.22+ (net/http, vanilla standard library routing, no external web frameworks)
+- **Backend:** Go 1.22+ (net/http, vanilla standard library `ServeMux` routing, no external web frameworks). Toolchain version: see `backend/go.mod`.
 - **Frontend:** Vue 3 (Composition API, `<script setup>`), TypeScript, Vite, Vue Router, Pinia
 - **Database:** PostgreSQL (`lib/pq` driver)
-- **Styling:** Vanilla CSS (Design system inspired by "A Dictionary of Color Combinations", Combo #109)
+- **Styling:** Vanilla CSS (Design system inspired by "A Dictionary of Color Combinations", Combo #109). **Themes:** `GET /api/config` exposes `active_theme`, `default_theme`, and `themes`; `App.vue` applies the chosen class on `document.body`.
 
 ## Project Architecture
 This is a Monorepo.
@@ -14,18 +14,23 @@ This is a Monorepo.
   - Generates secure IDs using `crypto/rand` (8-byte hex) under `auth.go`.
   - Enforces mandatory single-question logic limit (`survey.go`).
   - Computes `vote_count` using nested SQL queries (`survey.go`) to natively return poll results array in API JSON.
+  - Duplicate vote prevention: `SubmitAnswersHandler` returns **403** if an answer row already exists for the same `survey_id` + `user_id` (checked before insert; current DDL does not define a DB-level UNIQUE on that pair).
 - `/frontend/`: Vue 3 application running on port 5173.
-  - Deep localStorage integration via Pinia store (`optiyoo_user`, `completed_polls_usrId`).
-  - Fetches `/api/surveys` to natively render Twitter-like Poll UI with horizontal CSS percentage bars directly onto the Radio labels.
-  - Uses `v-model` for instant visual execution and 1-click answers instead of conventional forms.
+  - Deep localStorage integration via Pinia store: `optiyoo_user` for session; `completed_polls_<user.id>` for client-side completion cache (must stay consistent with API `user_answer` / 403).
+  - Fetches `/api/surveys?user_id=...` so the feed can hydrate `user_answer` and lock voted polls.
+  - Poll creation lives in `CreateSurveyModal.vue` on the dashboard (no dedicated `/create` route). Shareable survey URL: `/s/:id` → `SurveyView.vue`.
+  - Renders Twitter-like poll UI with horizontal CSS percentage bars on radio labels; instant POST on choice instead of a separate form submit.
 
 ## Core Business Requirements
-1. **Single Question Policy:** Every created survey is essentially a "Poll" (1 question strictly enforced). 
-2. **Open-Ended Restriction:** The config variable `config.AppConfig.AllowOpenEndedQuestions` is set to `false`. Frontend hits `/api/config` to dynamically lock the text question builder.
-3. **No Duplicate Voting:** Backend DB uniquely prevents duplicate SQL rows for answers with twin `survey_id` + `user_id`. Frontend catches `403` to persistently lock poll UI.
-4. **Reward System:** Submitting a poll answer awards `+5 OPT` to the user's Points balance in Postgres.
+1. **Single Question Policy:** Every created survey is essentially a "Poll" (1 question strictly enforced).
+2. **Open-Ended Restriction:** `config.AppConfig.AllowOpenEndedQuestions` is `false` by default. Frontend hits `/api/config` to lock the text question builder; backend rejects text questions on create when disabled.
+3. **No Duplicate Voting:** Backend rejects a second submission with **403**; frontend persists locked state via `completed_polls_<userId>` and server-provided `user_answer` when `user_id` is passed on list/detail GET.
+4. **Reward System (roadmap):** Product direction includes awarding **+5 OPT** per vote and surfacing balance in the profile. **Not implemented** in the current schema or `SubmitAnswersHandler`—do not assume a `points` column or automatic credit until migrations and handlers add them.
 
 ## Common Operations
 - **Start DB:** `docker-compose up -d` (Postgres on 5432)
 - **Start Backend:** `cd backend && go run .`
 - **Start Frontend:** `cd frontend && npm run dev`
+
+## Authoritative detail
+For routes, `localStorage` keys, API query params, and maintenance expectations for AI context, prefer `.agents/skills/optiyoo-context/SKILL.md` when it is more specific than this file.

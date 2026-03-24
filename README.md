@@ -1,62 +1,62 @@
 # Optiyoo
 
-**Optiyoo**, kullanıcıların hızlıca "Twitter/X benzeri" anketler (poll) oluşturabildiği ve aktif akış (feed) üzerinden anında oy kullanabildiği interaktif bir geri bildirim platformudur. 
+**Optiyoo**, kullanıcıların hızlıca "Twitter/X benzeri" anketler (poll) oluşturabildiği ve aktif akış (feed) üzerinden anında oy kullanabildiği interaktif bir geri bildirim platformudur.
 
-Kullanıcılar katıldıkları anketler üzerinden **OPT Puanı** (+5 OPT) kazanır ve bu puanlar profillerindeki cüzdanda anlık olarak listelenir. Oylama deneyimi, sonuçların ektileşimli yüzdelik (`%`) çubuklarıyla anında görselleştirildiği sosyal medya odaklı bir yapıya sahiptir.
+Oylama deneyimi, sonuçların etkileşimli yüzdelik (`%`) çubuklarıyla anında görselleştirildiği sosyal medya odaklı bir yapıya sahiptir. **OPT puanı (+5 oy başına)** ve profil cüzdanında gösterimi ürün yol haritasında yer alır; mevcut veritabanı ve API katmanında henüz uygulanmamıştır.
 
-## 🚀 Teknolojik Altyapı (Tech Stack)
+## Teknolojik Altyapı (Tech Stack)
 
 ### Backend (Golang)
-- **Dil:** Go 1.26+ 
-- **Mimari:** Dışa bağımlılığı (framework) en aza indirilmiş `net/http` tabanlı güncel `ServeMux` (Go 1.22+) routing yapısı.
-- **Veritabanı:** PostgreSQL (`lib/pq` Go sürücüsü ile)
-- **Öne Çıkan Özellikler:** Güvenli Cripto Random ID (`crypto/rand`) kullanımı, kompleks Vote aggregation için dinamik SQL join'leri.
+- **Dil / toolchain:** `backend/go.mod` içindeki Go sürümü (şu an 1.26.x).
+- **Mimari:** Dışa bağımlılığı (framework) en aza indirilmiş `net/http` tabanlı `ServeMux` (Go 1.22+) routing yapısı.
+- **Veritabanı:** PostgreSQL (`lib/pq` Go sürücüsü ile).
+- **Öne çıkan özellikler:** Güvenli kriptografik rastgele ID (`crypto/rand`), anket sonuçları için `vote_count` alt sorguları ile API JSON çıktısı.
 
 ### Frontend (Vue.js)
-- **Çatı:** Vue 3 (Composition API, `<script setup lang="ts">`) & Vite
-- **Durum Yönetimi (State):** Pinia
-- **Yönlendirme:** Vue Router
-- **Tasarım:** Sadece Vanilla CSS (Tailwind veya başka kütüphane kullanılmamıştır). Renk paleti Sanzo Wada Renk Kombinasyonları (#109) temel alınarak oluşturulmuş özgün, cam/modern ögeler barındıran bir stildir.
+- **Çatı:** Vue 3 (Composition API, `<script setup lang="ts">`) ve Vite.
+- **Durum yönetimi:** Pinia.
+- **Yönlendirme:** Vue Router (`/auth`, `/` feed, `/s/:id` paylaşılabilir anket sayfası).
+- **Tasarım:** Vanilla CSS (Tailwind veya benzeri yok). Renk paleti Sanzo Wada renk kombinasyonları (#109) temel alınır. Temalar `GET /api/config` ile sunulur ve `App.vue` içinde `body` sınıfı olarak uygulanır.
 
-## 📁 Proje Yapısı
-Monorepo mantığıyla tasarlanmıştır:
-- `/backend`: Uygulamanın sunucu tarafını tutar. İş kuralları, HTTP Handlers, veritabanı şemaları burada bulunur.
-- `/frontend`: Uygulamanın istemci (client) tarafını oluşturur. Anında oylama akışı (Dashboard), anket yaratma sayfası gibi etkileşimli ekranlar bu klasördedir.
+## Proje yapısı
+Monorepo:
+- **`/backend`:** HTTP handler’lar, veritabanı bağlantısı ve şema (`db/db.go`).
+- **`/frontend`:** Dashboard (feed + anında oylama), `CreateSurveyModal.vue` ile anket oluşturma, `SurveyCard` / `SurveyView` bileşenleri.
+- **`/scripts`:** İsteğe bağlı toplu test verisi (`seed_test_data.sh`).
 
-## ⚡ Geliştirme Ortamını Kurma ve Çalıştırma
+## Geliştirme ortamını kurma ve çalıştırma
 
-Projeyi yerel bilgisayarınızda (local) çalıştırmak için aşağıdaki araçların yüklü olması gerekir:
-- Go (1.26 önerilir)
-- Node.js & npm (18+ önerilir)
-- Docker & Docker Compose (PostgreSQL veritabanı için)
+Gereksinimler:
+- Go (`backend/go.mod` ile uyumlu sürüm)
+- Node.js ve npm (18+ önerilir)
+- Docker ve Docker Compose (PostgreSQL için)
 
-### Adım Adım Kurulum
+### Adımlar
 
-**1. Veritabanını Ayağa Kaldırın:**
-Projenin kök dizininde veya `/backend` içinde bulunan docker-compose dosyası aracılığıyla PostgreSQL'i başlatın.
+**1. Veritabanını başlatın** (proje kökünde):
 ```bash
 docker-compose up -d
 ```
 
-**2. Backend'i Başlatın:**
+**2. Backend’i çalıştırın:**
 ```bash
 cd backend
 go run .
 ```
-Backend `http://localhost:8080` adresinde çalışmaya başlayacak ve veritabanı bağlantısı ile tabloları (users, surveys, questions, options, answers) otomatik olarak yapılandıracaktır.
+Sunucu `http://localhost:8080` üzerinde dinler; tablolar (`users`, `surveys`, `questions`, `options`, `answers`) uygulama açılışında oluşturulur/doğrulanır.
 
-**3. Frontend'i Başlatın:**
+**3. Frontend’i çalıştırın:**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Frontend Vue CLI/Vite aracılığıyla ayağa kalkacak ve ekranda size yerel çalışma adresini (`http://localhost:5173` vb.) verecektir.
+Vite yerel adresi (ör. `http://localhost:5173`) terminalde gösterilir.
 
-## 🔐 Temel Kurallar ve Mimari Notlar
-- **Tek Soru Kuralı (Single Question Rule):** Sistem genelinde her bir anket, hızlı oylama yapılabilmesi adına sadece (1) tek bir soru barındırabilir.
-- **Açık Uçlu Soruların Kapatılması:** Optiyoo prototip (MVP) aşamasında ağırlıklı olarak "Çoktan Seçmeli (Single Choice)" yapıyı ön plana çıkarır. Açık uçlu sorular konfigürasyon tarafından şimdilik kısıtlanmıştır.
-- **Oylama ve Doğrulama:** Backend, kullanıcıların bir ankete sadece bir defa katılabilmesini SQL tabanlı güvence altına alırken; Frontend tarafında da lokal takibi (`completed_polls`) sürdürerek UI performansını artırır.
+## Temel kurallar ve mimari notlar
+- **Tek soru kuralı:** Her anket tam olarak bir soru içerebilir; aksi oluşturma isteğinde reddedilir.
+- **Açık uçlu sorular:** Yapılandırmada kapalıyken hem API oluşturmayı reddeder hem de istemci `/api/config` ile metin sorusunu kilitleyebilir.
+- **Çift oy:** Aynı kullanıcı aynı ankete ikinci kez cevap gönderemez; API **403** döner. İstemci tarafında `completed_polls_<kullanıcıId>` ve (varsa) `user_answer` ile arayüz tutarlı tutulur.
 
 ---
-*Bu proje, geliştirici ve sistem ajanlarının tam uyumla ilerlemesi adına .agents ve Cursor kuralları (cursorrules) referans alınarak ölçeklendirilmektedir.*
+*Ajan ve geliştirici bağlamı için `.agents/skills/optiyoo-context/SKILL.md` ve `.cursorrules` dosyaları referans alınmalıdır.*

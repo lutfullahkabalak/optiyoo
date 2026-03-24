@@ -32,18 +32,15 @@ func InitDB() {
 		id TEXT PRIMARY KEY,
 		email TEXT UNIQUE,
 		password TEXT,
-		name TEXT,
-		points INTEGER DEFAULT 0,
+		name VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
 	CREATE TABLE IF NOT EXISTS surveys (
 		id TEXT PRIMARY KEY,
-		title TEXT,
-		description TEXT,
 		creator_id TEXT,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		is_active BOOLEAN DEFAULT TRUE
+		is_active BOOLEAN DEFAULT false,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
 	CREATE TABLE IF NOT EXISTS questions (
@@ -76,9 +73,9 @@ func InitDB() {
 	
 	// Seed Dummy Survey for MVP Evaluation
 	DB.Exec(`
-		INSERT INTO surveys (id, title, description, creator_id) SELECT 'survey_1', 'Genel Memnuniyet Testi', 'Hizmetlerimizi nasıl buluyorsunuz? Fikirleriniz ve eleştrileriniz bizim için çok değerli!', 'system' WHERE NOT EXISTS (SELECT 1 FROM surveys WHERE id = 'survey_1');
-		INSERT INTO questions (id, survey_id, type, text, q_order) SELECT 'q1', 'survey_1', 'choice', 'Genel olarak bu uygulamadan ne kadar memnunsunuz?', 1 WHERE NOT EXISTS (SELECT 1 FROM questions WHERE id = 'q1');
-		INSERT INTO questions (id, survey_id, type, text, q_order) SELECT 'q2', 'survey_1', 'text', 'Geliştirilmesini istediğiniz en önemli özellik nedir?', 2 WHERE NOT EXISTS (SELECT 1 FROM questions WHERE id = 'q2');
+		INSERT INTO surveys (id, creator_id, is_active) SELECT 's1', 'u1', TRUE WHERE NOT EXISTS (SELECT 1 FROM surveys WHERE id = 's1');
+		INSERT INTO questions (id, survey_id, type, text, q_order) SELECT 'q1', 's1', 'choice', 'Genel olarak bu uygulamadan ne kadar memnunsunuz?', 1 WHERE NOT EXISTS (SELECT 1 FROM questions WHERE id = 'q1');
+		INSERT INTO questions (id, survey_id, type, text, q_order) SELECT 'q2', 's1', 'text', 'Geliştirilmesini istediğiniz en önemli özellik nedir?', 2 WHERE NOT EXISTS (SELECT 1 FROM questions WHERE id = 'q2');
 		INSERT INTO options (id, question_id, text) SELECT 'o1', 'q1', 'Harika🥳' WHERE NOT EXISTS (SELECT 1 FROM options WHERE id = 'o1');
 		INSERT INTO options (id, question_id, text) SELECT 'o2', 'q1', 'İdare Eder😐' WHERE NOT EXISTS (SELECT 1 FROM options WHERE id = 'o2');
 		INSERT INTO options (id, question_id, text) SELECT 'o3', 'q1', 'Kötü👎' WHERE NOT EXISTS (SELECT 1 FROM options WHERE id = 'o3');

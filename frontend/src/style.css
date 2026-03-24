@@ -49,6 +49,87 @@
   --shadow-lg: 0 10px 15px -3px rgba(1, 69, 94, 0.1), 0 4px 6px -2px rgba(1, 69, 94, 0.05);
 }
 
+body.theme-dark {
+  /* Slate & Rose based dark theme */
+  --color-prussian-blue: #0f172a;
+  --color-aqua: #2dd4bf;
+  --color-vermillion: #f43f5e;
+  --color-pale-beige: #1e293b;
+  --color-white: #1e293b;
+  --color-gray-100: #334155;
+  --color-gray-300: #64748b;
+  --color-gray-500: #94a3b8;
+
+  /* Semantic Colors override */
+  --bg-color: #0f172a;
+  --text-color: #f8fafc;
+  --text-color-muted: #94a3b8;
+  --primary-color: #f43f5e;
+  --primary-hover: #e11d48;
+  --secondary-color: #2dd4bf;
+  --border-color: #334155;
+
+  /* Shadows override for dark mode */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6), 0 4px 6px -2px rgba(0, 0, 0, 0.5);
+}
+
+body.theme-root {
+  /* Explicit root/default palette (same as :root, selectable from config) */
+  --color-prussian-blue: #01455e;
+  --color-aqua: #a1e2d9;
+  --color-vermillion: #ce3927;
+  --color-pale-beige: #fbf9f4;
+  --color-white: #ffffff;
+  --color-gray-100: #e2dfd9;
+  --color-gray-300: #b0ada8;
+  --color-gray-500: #7b7874;
+  --bg-color: var(--color-pale-beige);
+  --text-color: var(--color-prussian-blue);
+  --text-color-muted: var(--color-gray-500);
+  --primary-color: var(--color-vermillion);
+  --primary-hover: #b42f1f;
+  --secondary-color: var(--color-aqua);
+  --border-color: var(--color-gray-100);
+}
+
+body.theme-wada-1 {
+  /* Wada 1: Cool Blue & Slate */
+  --bg-color: #F0F4F8;
+  --text-color: #3E5566;
+  --text-color-muted: #6D8FA3;
+  --primary-color: #6D8FA3;
+  --primary-hover: #50768c;
+  --secondary-color: #A2C5D9;
+  --border-color: #d1e0eb;
+  --color-white: #ffffff;
+}
+
+body.theme-wada-2 {
+  /* Wada 2: Earthy Matcha & Sage */
+  --bg-color: #EEF3E9;
+  --text-color: #4C6045;
+  --text-color-muted: #6D8A63;
+  --primary-color: #6D8A63;
+  --primary-hover: #55704a;
+  --secondary-color: #C9D8B6;
+  --border-color: #d8e3d2;
+  --color-white: #ffffff;
+}
+
+body.theme-wada-3 {
+  /* Wada 3: Warm Mocha & Caramel */
+  --bg-color: #F5EFE6;
+  --text-color: #5C4530;
+  --text-color-muted: #8C6B4D;
+  --primary-color: #C8A27C;
+  --primary-hover: #b3885d;
+  --secondary-color: #ECD9C6;
+  --border-color: #e3d5c8;
+  --color-white: #ffffff;
+}
+
 /* Base Styles */
 * {
   box-sizing: border-box;
