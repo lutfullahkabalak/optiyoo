@@ -12,5 +12,9 @@ backend/optiyoo-backend
 vendor/
 .env
 
+# Local uploaded survey images (disk store; cwd is usually backend/)
+backend/data/uploads/
+data/uploads/
+
 # Agents
 .gemini/

@@ -3,6 +3,10 @@ import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import CreateSurveyModal from '../components/CreateSurveyModal.vue'
+import SurveyUserHeader from '../components/survey/SurveyUserHeader.vue'
+import SurveyQuestionBlock from '../components/survey/SurveyQuestionBlock.vue'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -15,6 +19,7 @@ const givenAnswers = ref<Record<string, string>>({})
 const copiedSurveyId = ref<string | null>(null)
 const animatedPercents = ref<Record<string, number>>({})
 const openMenuSurveyId = ref<string | null>(null)
+const activeQuestionIndexes = ref<Record<string, number>>({})
 
 const copyLink = async (surveyId: string) => {
   const link = `${window.location.origin}/s/${surveyId}`
@@ -37,27 +42,79 @@ const openSurveyDetail = (surveyId: string) => {
 }
 const submittingState = ref<Record<string, boolean>>({})
 const completedSurveys = ref<Set<string>>(new Set(JSON.parse(localStorage.getItem('completed_polls_' + authStore.user?.id) || '[]')))
+/** Soru seçildikten sonra (çoklu ankette) o soru tekrar değiştirilemez */
+const lockedQuestionIdsBySurvey = ref<Record<string, Record<string, true>>>({})
 
-const fetchSurveys = async () => {
-  isLoading.value = true
+const isSurveyFullyAnswered = (survey: any, answers: Record<string, string>) => {
+  const questions = survey?.questions || []
+  if (questions.length === 0) return false
+  return questions.every((q: any) => q.id != null && Boolean(answers[String(q.id)]))
+}
+
+const persistCompletedSurveys = () => {
+  const uid = authStore.user?.id
+  if (!uid) return
+  localStorage.setItem('completed_polls_' + uid, JSON.stringify(Array.from(completedSurveys.value)))
+}
+
+const fetchSurveys = async (opts?: { silent?: boolean }) => {
+  if (!opts?.silent) isLoading.value = true
   try {
-    const res = await fetch(`http://localhost:8080/api/surveys?user_id=${authStore.user?.id}`)
+    const res = await fetch(`${API_BASE}/api/surveys?user_id=${authStore.user?.id}`)
     if (res.ok) {
       surveys.value = await res.json()
       surveys.value.forEach((s: any) => {
-        if (s.user_answer) {
-          givenAnswers.value[s.questions[0].id] = s.user_answer
-          completedSurveys.value.add(s.id)
+        if (activeQuestionIndexes.value[s.id] === undefined) {
+          activeQuestionIndexes.value[s.id] = 0
+        }
+        const ua = s.user_answers as Record<string, string> | undefined
+        if (ua && typeof ua === 'object' && Object.keys(ua).length > 0) {
+          const prevLocks = lockedQuestionIdsBySurvey.value[s.id] || {}
+          const merged: Record<string, true> = { ...prevLocks }
+          const nextAnswers = { ...givenAnswers.value }
+          for (const [qid, optId] of Object.entries(ua)) {
+            const k = String(qid)
+            nextAnswers[k] = String(optId)
+            merged[k] = true
+          }
+          givenAnswers.value = nextAnswers
+          lockedQuestionIdsBySurvey.value = {
+            ...lockedQuestionIdsBySurvey.value,
+            [s.id]: merged
+          }
+          if (isSurveyFullyAnswered(s, nextAnswers)) {
+            completedSurveys.value.add(s.id)
+          } else {
+            completedSurveys.value.delete(s.id)
+          }
+        } else if (s.user_answer) {
+          const firstQuestionId = s?.questions?.[0]?.id
+          if (firstQuestionId) {
+            const fid = String(firstQuestionId)
+            const nextAnswers = { ...givenAnswers.value, [fid]: String(s.user_answer) }
+            givenAnswers.value = nextAnswers
+            const prevLocks = lockedQuestionIdsBySurvey.value[s.id] || {}
+            lockedQuestionIdsBySurvey.value = {
+              ...lockedQuestionIdsBySurvey.value,
+              [s.id]: { ...prevLocks, [fid]: true }
+            }
+            if (isSurveyFullyAnswered(s, nextAnswers)) {
+              completedSurveys.value.add(s.id)
+            } else {
+              completedSurveys.value.delete(s.id)
+            }
+          }
         }
         if (completedSurveys.value.has(s.id)) {
-          setSurveyPercentsInstant(s)
+          setSurveyPercentsInstant(s, getCurrentQuestion(s))
         }
       })
+      persistCompletedSurveys()
     }
   } catch (e) {
     console.error(e)
   } finally {
-    isLoading.value = false
+    if (!opts?.silent) isLoading.value = false
   }
 }
 
@@ -92,13 +149,42 @@ const getOptionPercent = (q: any, opt: any) => {
 
 const getOptionAnimKey = (surveyId: string, optionId: string) => `${surveyId}:${optionId}`
 
+const getCurrentQuestion = (survey: any) => {
+  const questions = survey?.questions || []
+  if (questions.length === 0) return null
+  const activeIndex = activeQuestionIndexes.value[survey.id] ?? 0
+  return questions[Math.min(Math.max(activeIndex, 0), questions.length - 1)]
+}
+
+const isCurrentQuestionAnswerLocked = (survey: any) => {
+  const q = getCurrentQuestion(survey)
+  if (q?.id == null || completedSurveys.value.has(survey.id)) return false
+  return Boolean(lockedQuestionIdsBySurvey.value[survey.id]?.[String(q.id)])
+}
+
+const canGoPrevQuestion = (survey: any) => (activeQuestionIndexes.value[survey.id] ?? 0) > 0
+
+const canGoNextQuestion = (survey: any) => {
+  const questions = survey?.questions || []
+  return (activeQuestionIndexes.value[survey.id] ?? 0) < questions.length - 1
+}
+
+const goToPrevQuestion = (survey: any) => {
+  if (!canGoPrevQuestion(survey)) return
+  activeQuestionIndexes.value[survey.id] = (activeQuestionIndexes.value[survey.id] ?? 0) - 1
+}
+
+const goToNextQuestion = (survey: any) => {
+  if (!canGoNextQuestion(survey)) return
+  activeQuestionIndexes.value[survey.id] = (activeQuestionIndexes.value[survey.id] ?? 0) + 1
+}
+
 const getAnimatedPercent = (survey: any, q: any, opt: any) => {
   const key = getOptionAnimKey(survey.id, opt.id)
   return animatedPercents.value[key] ?? getOptionPercent(q, opt)
 }
 
-const setSurveyPercentsInstant = (survey: any) => {
-  const q = survey?.questions?.[0]
+const setSurveyPercentsInstant = (survey: any, q: any) => {
   if (!q?.options) return
 
   q.options.forEach((opt: any) => {
@@ -107,11 +193,10 @@ const setSurveyPercentsInstant = (survey: any) => {
   })
 }
 
-const animateSurveyPercents = (survey: any) => {
-  const q = survey?.questions?.[0]
+const animateSurveyPercents = (survey: any, q: any) => {
   if (!q?.options) return
 
-  const targets = q.options.map((opt: any) => ({
+  const targets: Array<{ key: string; target: number }> = q.options.map((opt: any) => ({
     key: getOptionAnimKey(survey.id, opt.id),
     target: getOptionPercent(q, opt)
   }))
@@ -137,44 +222,72 @@ const animateSurveyPercents = (survey: any) => {
   requestAnimationFrame(tick)
 }
 
-const submitPoll = async (survey: any, val: string) => {
-  if (!val || completedSurveys.value.has(survey.id)) return
+const revertQuestionSelection = (survey: any, questionId: string) => {
+  const qid = String(questionId)
+  const prevLocks = { ...(lockedQuestionIdsBySurvey.value[survey.id] || {}) }
+  delete prevLocks[qid]
+  lockedQuestionIdsBySurvey.value = {
+    ...lockedQuestionIdsBySurvey.value,
+    [survey.id]: prevLocks
+  }
+  const next = { ...givenAnswers.value }
+  delete next[qid]
+  givenAnswers.value = next
+}
+
+const handleQuestionSelect = async (survey: any, payload: { questionId: string; optionId: string }) => {
+  if (completedSurveys.value.has(survey.id)) return
+  const qid = String(payload.questionId)
+  if (lockedQuestionIdsBySurvey.value[survey.id]?.[qid]) return
+  givenAnswers.value = { ...givenAnswers.value, [qid]: String(payload.optionId) }
+  const prev = lockedQuestionIdsBySurvey.value[survey.id] || {}
+  lockedQuestionIdsBySurvey.value = {
+    ...lockedQuestionIdsBySurvey.value,
+    [survey.id]: { ...prev, [qid]: true }
+  }
+  await submitSingleAnswer(survey, qid, String(payload.optionId))
+}
+
+const submitSingleAnswer = async (survey: any, questionId: string, optionId: string) => {
+  if (submittingState.value[survey.id]) return
 
   submittingState.value[survey.id] = true
   const payload = {
     user_id: authStore.user?.id,
-    answers: [{ question_id: survey.questions[0].id, value: val }]
+    answers: [{ question_id: questionId, value: optionId }]
   }
 
   try {
-    const res = await fetch(`http://localhost:8080/api/surveys/${survey.id}/answers`, {
+    const res = await fetch(`${API_BASE}/api/surveys/${survey.id}/answers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
 
     if (res.ok) {
-      const q = survey.questions[0]
-      const opt = q.options.find((o: any) => o.id === val)
+      const answeredQ = survey.questions?.find((q: any) => String(q.id) === questionId)
+      const opt = answeredQ?.options?.find((o: any) => String(o.id) === optionId)
       if (opt) opt.vote_count = (opt.vote_count || 0) + 1
 
-      completedSurveys.value.add(survey.id)
-      localStorage.setItem('completed_polls_' + authStore.user?.id, JSON.stringify(Array.from(completedSurveys.value)))
+      if (isSurveyFullyAnswered(survey, givenAnswers.value)) {
+        completedSurveys.value.add(survey.id)
+        persistCompletedSurveys()
+      }
 
       await nextTick()
-      animateSurveyPercents(survey)
+      if (answeredQ) animateSurveyPercents(survey, answeredQ)
     } else {
       const text = await res.text()
       if (res.status === 403) {
-        completedSurveys.value.add(survey.id)
-        localStorage.setItem('completed_polls_' + authStore.user?.id, JSON.stringify(Array.from(completedSurveys.value)))
-        setSurveyPercentsInstant(survey)
+        await fetchSurveys({ silent: true })
       } else {
+        revertQuestionSelection(survey, questionId)
         alert('Oylama İptali: ' + text)
       }
     }
   } catch (e) {
     console.error(e)
+    revertQuestionSelection(survey, questionId)
   } finally {
     submittingState.value[survey.id] = false
   }
@@ -239,6 +352,8 @@ const timeAgo = (dateStr: string) => {
 const getCreatorName = (survey: any) => survey.creator_name || 'Optiyoo'
 
 const getCreatorHandle = (survey: any) => {
+  const h = String(survey.creator_username || '').trim()
+  if (h) return `@${h}`
   const name = getCreatorName(survey)
   return `@${name.toLowerCase().replace(/\s+/g, '')}`
 }
@@ -250,7 +365,7 @@ const getCreatorHandle = (survey: any) => {
     <!-- Sol Kenar Çubuğu -->
     <aside class="x-sidebar">
       <div class="x-sidebar-inner">
-        <div class="x-logo">optiyoo</div>
+        <router-link to="/" class="x-logo">optiyoo</router-link>
 
         <nav class="x-nav">
           <router-link to="/" class="x-nav-item">
@@ -266,6 +381,13 @@ const getCreatorHandle = (survey: any) => {
             </svg>
             <span>Oluştur</span>
           </button>
+
+          <router-link to="/settings" class="x-nav-item" title="Profil ayarları">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+            </svg>
+            <span>Profil</span>
+          </router-link>
 
           <button class="x-nav-item x-logout" @click="handleLogout">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -287,11 +409,6 @@ const getCreatorHandle = (survey: any) => {
       <div v-else-if="surveys.length === 0" class="x-state-msg">Şu an aktif bir oylama bulunmuyor.</div>
 
       <article v-for="s in surveys" :key="s.id" class="x-post" @click="closeSurveyMenu">
-        <!-- Avatar -->
-        <div class="x-avatar" :style="{ background: getAvatarColor(s.id) }">
-          {{ (s.questions && s.questions.length > 0 && s.questions[0].text) ? s.questions[0].text.charAt(0).toUpperCase() : '?' }}
-        </div>
-
         <!-- Post İçeriği -->
         <div class="x-post-body">
           <div class="x-post-top-actions">
@@ -311,64 +428,36 @@ const getCreatorHandle = (survey: any) => {
             </div>
           </div>
 
-          <!-- Post Başlığı -->
-          <div class="x-post-meta">
-            <span class="x-display-name">{{ getCreatorName(s) }}</span>
-            <span class="x-handle">{{ getCreatorHandle(s) }}</span>
-            <span class="x-dot">·</span>
-            <span class="x-time">{{ timeAgo(s.created_at) }}</span>
-            <span v-if="!completedSurveys.has(s.id)" class="x-new-badge">Yeni</span>
-          </div>
+          <SurveyUserHeader
+            :avatar-color="getAvatarColor(s.id)"
+            :avatar-text="(s.questions && s.questions.length > 0 && getCurrentQuestion(s)?.text) ? getCurrentQuestion(s).text.charAt(0).toUpperCase() : '?'"
+            :display-name="getCreatorName(s)"
+            :handle="getCreatorHandle(s)"
+            :time-ago="timeAgo(s.created_at)"
+            :is-new="!completedSurveys.has(s.id)"
+          />
 
-          <!-- Soru Metni -->
-          <p class="x-post-title">{{ s.questions && s.questions.length > 0 ? s.questions[0].text : 'Soru bulunamadı' }}</p>
-
-          <!-- Poll Seçenekleri -->
-          <div v-if="s.questions && s.questions.length > 0 && s.questions[0].type === 'single_choice'" class="x-poll">
-            <label
-              v-for="opt in s.questions[0].options"
-              :key="opt.id"
-              class="x-poll-opt"
-              :class="{
-                'is-voted': completedSurveys.has(s.id),
-                'is-selected': givenAnswers[s.questions[0].id] === opt.id,
-                'is-disabled': completedSurveys.has(s.id)
-              }"
-            >
-              <!-- Progress bar -->
-              <div
-                class="x-progress-fill"
-                :class="{
-                  'is-selected-fill': givenAnswers[s.questions[0].id] === opt.id,
-                  'is-visible': completedSurveys.has(s.id)
-                }"
-                :style="{ width: `${completedSurveys.has(s.id) ? getAnimatedPercent(s, s.questions[0], opt) : 0}%` }"
-              ></div>
-
-              <div class="x-poll-opt-content">
-                <input
-                  type="radio"
-                  :name="'survey_' + s.id"
-                  :value="opt.id"
-                  v-model="givenAnswers[s.questions[0].id]"
-                  @change="submitPoll(s, opt.id)"
-                  :disabled="completedSurveys.has(s.id)"
-                  style="display:none"
-                />
-                <div class="x-radio" :class="{ 'is-checked': givenAnswers[s.questions[0].id] === opt.id }"></div>
-                <span class="x-opt-text">{{ opt.text }}</span>
-                <span class="x-opt-pct" :class="{ 'is-visible': completedSurveys.has(s.id) }">
-                  {{ getAnimatedPercent(s, s.questions[0], opt) }}%
-                </span>
-              </div>
-            </label>
-
-          </div>
+          <SurveyQuestionBlock
+            :survey-id="s.id"
+            :question="getCurrentQuestion(s)"
+            :question-count="s?.questions?.length || 0"
+            :question-index="(activeQuestionIndexes[s.id] ?? 0) + 1"
+            :can-go-prev="canGoPrevQuestion(s)"
+            :can-go-next="canGoNextQuestion(s)"
+            :selected-answer="getCurrentQuestion(s)?.id != null ? (givenAnswers[String(getCurrentQuestion(s).id)] || '') : ''"
+            :is-completed="completedSurveys.has(s.id)"
+            :is-answer-locked="isCurrentQuestionAnswerLocked(s)"
+            :get-percent="(opt: any) => getAnimatedPercent(s, getCurrentQuestion(s), opt)"
+            :api-base="API_BASE"
+            @prev="goToPrevQuestion(s)"
+            @next="goToNextQuestion(s)"
+            @select="handleQuestionSelect(s, $event)"
+          />
 
           <!-- Alt Aksiyonlar -->
           <div class="x-actions">
             <p v-if="completedSurveys.has(s.id)" class="x-total-votes">
-              {{ getTotalVotes(s.questions[0]) }} oy
+              {{ getTotalVotes(getCurrentQuestion(s)) }} oy
             </p>
             <button
               class="x-action-btn x-share-btn"
@@ -397,15 +486,15 @@ const getCreatorHandle = (survey: any) => {
 
     <!-- Sağ Panel -->
     <aside class="x-right-panel">
-      <div class="x-user-card">
+      <router-link to="/settings" class="x-user-card x-user-card-link" title="Profil ayarları">
         <div class="x-user-avatar" :style="{ background: getAvatarColor(authStore.user.id) }">
           {{ authStore.user.name.charAt(0).toUpperCase() }}
         </div>
         <div class="x-user-info">
           <div class="x-user-name">{{ authStore.user.name }}</div>
-          <div class="x-user-handle">@{{ authStore.user.email?.split('@')[0] || 'kullanici' }}</div>
+          <div class="x-user-handle">@{{ authStore.user.username || authStore.user.email?.split('@')[0] || 'kullanici' }}</div>
         </div>
-      </div>
+      </router-link>
 
       <div class="x-stats-card">
         <div class="x-stats-title">Özet</div>
@@ -432,10 +521,13 @@ const getCreatorHandle = (survey: any) => {
 /* ─── Layout ──────────────────────────────────────────── */
 .x-layout {
   display: flex;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: transparent;
   max-width: 1280px;
+  width: 100%;
   margin: 0 auto;
+  overflow-x: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
 /* ─── Sol Kenar Çubuğu ─────────────────────────────────── */
@@ -445,6 +537,7 @@ const getCreatorHandle = (survey: any) => {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   background: transparent;
   border-right: 1px solid var(--border-color);
 }
@@ -455,12 +548,14 @@ const getCreatorHandle = (survey: any) => {
   height: 100%;
 }
 .x-logo {
+  display: block;
   padding: 12px 16px;
   color: var(--primary-color);
   font-size: var(--font-size-2xl);
   font-weight: 700;
   letter-spacing: -0.05em;
   margin-bottom: 8px;
+  text-decoration: none;
 }
 .x-nav {
   display: flex;
@@ -505,10 +600,11 @@ const getCreatorHandle = (survey: any) => {
 .x-feed-header {
   position: sticky;
   top: 0;
-  background: rgba(255,255,255,0.85);
+  background: color-mix(in srgb, var(--color-white) 88%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   padding: 14px 20px;
+  padding-top: max(14px, env(safe-area-inset-top, 0px));
   border-bottom: 1px solid var(--border-color);
   z-index: 10;
 }
@@ -534,18 +630,6 @@ const getCreatorHandle = (survey: any) => {
 }
 .x-post:hover {
   background: #f7f9f9;
-}
-.x-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 16px;
-  color: #fff;
-  flex-shrink: 0;
 }
 .x-post-body {
   flex: 1;
@@ -601,142 +685,6 @@ const getCreatorHandle = (survey: any) => {
 }
 .x-more-item:hover {
   background: var(--bg-color);
-}
-.x-post-meta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-.x-display-name {
-  font-weight: 700;
-  font-size: 15px;
-  color: var(--text-color);
-}
-.x-handle, .x-time {
-  font-size: 14px;
-  color: var(--text-color-muted);
-}
-.x-dot {
-  color: var(--text-color-muted);
-  font-size: 14px;
-}
-.x-new-badge {
-  margin-left: 6px;
-  background: var(--primary-color);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 9999px;
-}
-.x-post-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-color);
-  margin-bottom: 2px;
-}
-.x-post-desc {
-  font-size: 14px;
-  color: var(--text-color-muted);
-  margin-bottom: 12px;
-}
-.x-submitting {
-  font-size: 14px;
-  color: var(--primary-color);
-  padding: 8px 0;
-  font-weight: 600;
-}
-
-/* ─── Poll ─────────────────────────────────────────────── */
-.x-poll {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 12px;
-}
-.x-poll-opt {
-  position: relative;
-  border: 2px solid var(--border-color);
-  border-radius: 9999px;
-  overflow: hidden;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-.x-poll-opt:not(.is-disabled):hover {
-  border-color: var(--primary-color);
-}
-.x-poll-opt.is-selected {
-  border-color: var(--primary-color);
-}
-.x-poll-opt.is-disabled {
-  cursor: default;
-}
-.x-progress-fill {
-  position: absolute;
-  top: 0; left: 0; bottom: 0;
-  background: #c8c4bd;
-  opacity: 0;
-  border-radius: 9999px;
-  transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-  z-index: 0;
-}
-.x-progress-fill.is-visible {
-  opacity: 0.92;
-}
-.x-progress-fill.is-selected-fill {
-  background: #c8c4bd;
-}
-.x-poll-opt-content {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  padding: 10px 18px;
-  gap: 12px;
-}
-.x-radio {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid var(--border-color);
-  background: #fff;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-.x-radio.is-checked {
-  border-color: var(--primary-color);
-}
-.x-radio.is-checked::after {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--primary-color);
-}
-.x-opt-text {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-color);
-  flex: 1;
-}
-.x-opt-pct {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-color);
-  min-width: 44px;
-  text-align: right;
-  opacity: 0;
-  transform: translateX(4px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.x-opt-pct.is-visible {
-  opacity: 1;
-  transform: translateX(0);
 }
 .x-total-votes {
   font-size: 13px;
@@ -800,6 +748,16 @@ const getCreatorHandle = (survey: any) => {
   align-items: center;
   gap: 12px;
 }
+.x-user-card-link {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.x-user-card-link:hover {
+  background: var(--bg-color);
+  border-color: var(--color-gray-300);
+}
 .x-user-avatar {
   width: 42px;
   height: 42px;
@@ -862,9 +820,51 @@ const getCreatorHandle = (survey: any) => {
   .x-right-panel { display: none; }
 }
 @media (max-width: 700px) {
-  .x-sidebar { width: 70px; }
+  .x-sidebar {
+    width: 64px;
+    min-width: 64px;
+  }
+  .x-sidebar-inner {
+    padding: 8px 6px;
+    padding-top: max(8px, env(safe-area-inset-top, 0px));
+  }
   .x-nav-item span, .x-logo span { display: none; }
-  .x-nav-item { justify-content: center; }
-  .x-logo { display: flex; justify-content: center; }
+  .x-nav-item {
+    justify-content: center;
+    min-height: 48px;
+    min-width: 48px;
+    padding: 12px;
+    border-radius: 12px;
+  }
+  .x-logo {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 0.7rem;
+    font-weight: 800;
+    padding: 10px 4px;
+    line-height: 1.15;
+    text-align: center;
+    word-break: break-word;
+    hyphens: auto;
+  }
+  .x-feed-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .x-post {
+    padding: 12px 12px;
+  }
+}
+@media (max-width: 380px) {
+  .x-sidebar {
+    width: 56px;
+    min-width: 56px;
+  }
+  .x-nav-item {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 8px;
+  }
 }
 </style>

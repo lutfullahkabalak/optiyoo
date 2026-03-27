@@ -10,6 +10,7 @@ const isLoginMode = ref(true)
 const email = ref('test3@test.com')
 const password = ref('123')
 const name = ref('')
+const username = ref('')
 const errorMessage = ref('')
 const isLoading = ref(false)
 
@@ -26,7 +27,13 @@ const handleAuth = async () => {
         isLoading.value = false
         return
     }
+    if (!username.value.trim()) {
+        errorMessage.value = 'Lütfen kullanıcı adı girin.'
+        isLoading.value = false
+        return
+    }
     payload.name = name.value
+    payload.username = username.value.trim()
   }
 
   try {
@@ -57,17 +64,19 @@ const handleAuth = async () => {
   <div class="app-wrapper animate-fade-in">
     <header class="header">
       <div class="container flex justify-between items-center header-inner">
-        <div class="logo">optiyoo</div>
-        <nav class="nav">
-          <button class="btn btn-outline" style="margin-right: var(--spacing-3);" @click="isLoginMode = true">Giriş Yap</button>
-          <button class="btn btn-primary" @click="isLoginMode = false">Kaydol</button>
+        <router-link to="/" class="logo-link">
+          <span class="logo">optiyoo</span>
+        </router-link>
+        <nav class="auth-nav">
+          <button type="button" class="btn btn-outline auth-nav-btn" @click="isLoginMode = true">Giriş Yap</button>
+          <button type="button" class="btn btn-primary auth-nav-btn" @click="isLoginMode = false">Kaydol</button>
         </nav>
       </div>
     </header>
 
     <main class="container main-content mt-8 flex justify-center items-center flex-col">
-      <h1 class="text-center" style="font-size: var(--font-size-4xl); margin-bottom: var(--spacing-2);">Anket Oluştur & Çöz</h1>
-      <p class="text-center text-muted mb-8" style="font-size: var(--font-size-lg); color: var(--text-color-muted); max-width: 600px;">
+      <h1 class="text-center hero-title">Anket Oluştur & Çöz</h1>
+      <p class="text-center text-muted hero-lead mb-8">
         Fikirlerinizi paylaşın, başkalarının fikirlerini öğrenin. Hemen kayıt olarak anket oluşturmaya başlayın.
       </p>
 
@@ -82,6 +91,10 @@ const handleAuth = async () => {
           <div class="form-group" v-if="!isLoginMode">
             <label class="form-label">Ad Soyad</label>
             <input type="text" v-model="name" class="form-control" placeholder="Adınız" />
+          </div>
+          <div class="form-group" v-if="!isLoginMode">
+            <label class="form-label">Kullanıcı adı</label>
+            <input type="text" v-model="username" class="form-control" placeholder="benzersiz_kullanici_adi" autocomplete="username" />
           </div>
           <div class="form-group">
             <label class="form-label">E-posta</label>
@@ -114,6 +127,14 @@ const handleAuth = async () => {
   background-color: var(--color-white);
   border-bottom: 1px solid var(--border-color);
   padding: var(--spacing-4) 0;
+  padding-top: max(var(--spacing-4), env(safe-area-inset-top, 0px));
+}
+.header-inner {
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+}
+.logo-link {
+  text-decoration: none;
 }
 .logo {
   font-size: var(--font-size-2xl);
@@ -121,7 +142,43 @@ const handleAuth = async () => {
   color: var(--primary-color);
   letter-spacing: -0.05em;
 }
+.auth-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  justify-content: flex-end;
+}
+.auth-nav-btn {
+  font-size: var(--font-size-sm);
+}
 .main-content {
   flex: 1;
+  padding-left: max(0px, env(safe-area-inset-left, 0px));
+  padding-right: max(0px, env(safe-area-inset-right, 0px));
+  padding-bottom: max(var(--spacing-8), env(safe-area-inset-bottom, 0px));
+}
+.hero-title {
+  font-size: clamp(1.5rem, 6vw, var(--font-size-4xl));
+  margin-bottom: var(--spacing-2);
+  line-height: 1.15;
+  padding: 0 var(--spacing-2);
+}
+.hero-lead {
+  font-size: clamp(var(--font-size-base), 3.5vw, var(--font-size-lg));
+  color: var(--text-color-muted);
+  max-width: 600px;
+  padding: 0 var(--spacing-2);
+  text-wrap: balance;
+}
+@media (max-width: 480px) {
+  .auth-nav {
+    width: 100%;
+    justify-content: stretch;
+  }
+  .auth-nav-btn {
+    flex: 1;
+    min-height: 44px;
+  }
 }
 </style>

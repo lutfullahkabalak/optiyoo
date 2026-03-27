@@ -35,7 +35,7 @@ for i in $(seq 1 "$USER_COUNT"); do
   name="Test User ${i}"
 
   register_payload=$(cat <<EOF
-{"email":"$email","password":"$PASSWORD","name":"$name"}
+{"email":"$email","password":"$PASSWORD","name":"$name","username":"testuser${i}"}
 EOF
 )
 

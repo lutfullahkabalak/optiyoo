@@ -15,9 +15,19 @@ const router = createRouter({
       component: () => import('../views/DashboardView.vue')
     },
     {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('../views/ProfileSettingsView.vue')
+    },
+    {
       path: '/s/:id',
       name: 'survey',
       component: () => import('../views/SurveyView.vue')
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('../views/NotFoundView.vue')
     }
   ]
 })

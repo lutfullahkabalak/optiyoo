@@ -2,6 +2,10 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import SurveyUserHeader from '../components/survey/SurveyUserHeader.vue'
+import SurveyQuestionBlock from '../components/survey/SurveyQuestionBlock.vue'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,10 +15,28 @@ const survey = ref<any>(null)
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 const isCompleted = ref(false)
-const givenAnswer = ref<string | null>(null)
+const givenAnswers = ref<Record<string, string>>({})
+const lockedQuestionIds = ref<Set<string>>(new Set())
 const copiedLink = ref(false)
 
 const surveyId = route.params.id as string
+
+const isSurveyFullyAnswered = (s: any, answers: Record<string, string>) => {
+  const questions = s?.questions || []
+  if (questions.length === 0) return false
+  return questions.every((q: any) => q.id != null && Boolean(answers[String(q.id)]))
+}
+
+const syncCompletedLocalStorage = (full: boolean) => {
+  const uid = authStore.user?.id
+  if (!uid) return
+  const completed = new Set<string>(
+    JSON.parse(localStorage.getItem('completed_polls_' + uid) || '[]')
+  )
+  if (full) completed.add(surveyId)
+  else completed.delete(surveyId)
+  localStorage.setItem('completed_polls_' + uid, JSON.stringify(Array.from(completed)))
+}
 
 onMounted(async () => {
   if (!authStore.isAuthenticated) {
@@ -22,20 +44,36 @@ onMounted(async () => {
     return
   }
 
-  const completed = new Set<string>(
-    JSON.parse(localStorage.getItem('completed_polls_' + authStore.user?.id) || '[]')
-  )
-  isCompleted.value = completed.has(surveyId)
-
   try {
     const res = await fetch(
-      `http://localhost:8080/api/surveys/${surveyId}?user_id=${authStore.user?.id}`
+      `${API_BASE}/api/surveys/${surveyId}?user_id=${authStore.user?.id}`
     )
     if (res.ok) {
       survey.value = await res.json()
-      if (survey.value.user_answer) {
-        givenAnswer.value = survey.value.user_answer
-        isCompleted.value = true
+      const uaRaw = survey.value.user_answers as Record<string, string> | undefined
+      const ua =
+        uaRaw && typeof uaRaw === 'object'
+          ? Object.fromEntries(
+              Object.entries(uaRaw).map(([k, v]) => [String(k), String(v)])
+            )
+          : undefined
+      if (ua && Object.keys(ua).length > 0) {
+        givenAnswers.value = { ...givenAnswers.value, ...ua }
+        lockedQuestionIds.value = new Set([...lockedQuestionIds.value, ...Object.keys(ua)])
+        isCompleted.value = isSurveyFullyAnswered(survey.value, givenAnswers.value)
+        syncCompletedLocalStorage(isCompleted.value)
+      } else if (survey.value.user_answer) {
+        const firstQuestionId = survey.value?.questions?.[0]?.id
+        if (firstQuestionId) {
+          const fid = String(firstQuestionId)
+          givenAnswers.value = {
+            ...givenAnswers.value,
+            [fid]: String(survey.value.user_answer)
+          }
+          lockedQuestionIds.value = new Set(lockedQuestionIds.value).add(fid)
+        }
+        isCompleted.value = isSurveyFullyAnswered(survey.value, givenAnswers.value)
+        syncCompletedLocalStorage(isCompleted.value)
       }
     }
   } catch (e) {
@@ -50,53 +88,75 @@ const getTotalVotes = (q: any) => {
   return q.options.reduce((sum: number, o: any) => sum + (o.vote_count || 0), 0)
 }
 
-const submitVote = async (optionId: string) => {
-  if (isCompleted.value || isSubmitting.value || !survey.value) return
+const revertQuestionSelection = (questionId: string) => {
+  const qid = String(questionId)
+  const next = new Set(lockedQuestionIds.value)
+  next.delete(qid)
+  lockedQuestionIds.value = next
+  const ga = { ...givenAnswers.value }
+  delete ga[qid]
+  givenAnswers.value = ga
+}
+
+const handleQuestionSelect = async (payload: { questionId: string; optionId: string }) => {
+  if (isCompleted.value || !survey.value) return
+  const qid = String(payload.questionId)
+  if (lockedQuestionIds.value.has(qid)) return
+  givenAnswers.value = { ...givenAnswers.value, [qid]: String(payload.optionId) }
+  lockedQuestionIds.value = new Set(lockedQuestionIds.value).add(qid)
+  await submitSingleAnswer(qid, String(payload.optionId))
+}
+
+const submitSingleAnswer = async (questionId: string, optionId: string) => {
+  if (isSubmitting.value || !survey.value) return
 
   isSubmitting.value = true
   const payload = {
     user_id: authStore.user?.id,
-    answers: [{ question_id: survey.value.questions[0].id, value: optionId }]
+    answers: [{ question_id: questionId, value: optionId }]
   }
 
   try {
-    const res = await fetch(`http://localhost:8080/api/surveys/${surveyId}/answers`, {
+    const res = await fetch(`${API_BASE}/api/surveys/${surveyId}/answers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
 
     if (res.ok) {
-      givenAnswer.value = optionId
-      isCompleted.value = true
-
-      const completed = new Set<string>(
-        JSON.parse(localStorage.getItem('completed_polls_' + authStore.user?.id) || '[]')
-      )
-      completed.add(surveyId)
-      localStorage.setItem(
-        'completed_polls_' + authStore.user?.id,
-        JSON.stringify(Array.from(completed))
-      )
-
-      // Yerel oy sayısını güncelle
-      const q = survey.value.questions[0]
-      const opt = q.options.find((o: any) => o.id === optionId)
+      const q = survey.value.questions?.find((x: any) => String(x.id) === questionId)
+      const opt = q?.options?.find((o: any) => String(o.id) === optionId)
       if (opt) opt.vote_count = (opt.vote_count || 0) + 1
-      survey.value.questions[0] = { ...q }
+
+      if (isSurveyFullyAnswered(survey.value, givenAnswers.value)) {
+        isCompleted.value = true
+        syncCompletedLocalStorage(true)
+      }
     } else if (res.status === 403) {
-      isCompleted.value = true
-      const completed = new Set<string>(
-        JSON.parse(localStorage.getItem('completed_polls_' + authStore.user?.id) || '[]')
+      const r = await fetch(
+        `${API_BASE}/api/surveys/${surveyId}?user_id=${authStore.user?.id}`
       )
-      completed.add(surveyId)
-      localStorage.setItem(
-        'completed_polls_' + authStore.user?.id,
-        JSON.stringify(Array.from(completed))
-      )
+      if (r.ok) {
+        survey.value = await r.json()
+        const uaRaw = survey.value.user_answers as Record<string, string> | undefined
+        if (uaRaw && typeof uaRaw === 'object') {
+          const ua = Object.fromEntries(
+            Object.entries(uaRaw).map(([k, v]) => [String(k), String(v)])
+          )
+          givenAnswers.value = { ...givenAnswers.value, ...ua }
+          lockedQuestionIds.value = new Set([...Object.keys(ua)])
+        }
+        isCompleted.value = isSurveyFullyAnswered(survey.value, givenAnswers.value)
+        syncCompletedLocalStorage(isCompleted.value)
+      }
+    } else {
+      const text = await res.text()
+      revertQuestionSelection(questionId)
+      alert('Oylama İptali: ' + text)
     }
   } catch (e) {
     console.error(e)
+    revertQuestionSelection(questionId)
   } finally {
     isSubmitting.value = false
   }
@@ -111,6 +171,8 @@ const copyLink = async () => {
 const getCreatorName = (s: any) => s?.creator_name || 'Optiyoo'
 
 const getCreatorHandle = (s: any) => {
+  const h = String(s?.creator_username || '').trim()
+  if (h) return `@${h}`
   const name = getCreatorName(s)
   return `@${name.toLowerCase().replace(/\s+/g, '')}`
 }
@@ -142,16 +204,18 @@ const getAvatarColor = (id: string) => {
   <div class="app-wrapper animate-fade-in">
     <header class="header">
       <div class="container flex justify-between items-center header-inner">
-        <div class="logo">optiyoo</div>
+        <router-link to="/" class="logo-link">
+          <span class="logo">optiyoo</span>
+        </router-link>
         <nav class="nav">
-          <router-link to="/" style="text-decoration:none;">
-            <button class="btn btn-outline" style="font-size:13px;">← Geri</button>
+          <router-link to="/" class="back-btn-wrap">
+            <button type="button" class="btn btn-outline back-btn">← Geri</button>
           </router-link>
         </nav>
       </div>
     </header>
 
-    <main class="container main-content mt-8" style="max-width: 600px; width: 100%;">
+    <main class="container main-content survey-main">
       <div v-if="isLoading" class="card text-center text-muted">Yükleniyor...</div>
 
       <div v-else-if="!survey" class="card text-center text-muted">
@@ -169,57 +233,48 @@ const getAvatarColor = (id: string) => {
         </div>
 
         <div class="s-header">
-          <div class="s-avatar" :style="{ background: getAvatarColor(survey.id) }">
-            {{ getCreatorName(survey).charAt(0).toUpperCase() }}
-          </div>
-          <div class="s-meta">
-            <div class="s-author-row">
-              <span class="s-author-name">{{ getCreatorName(survey) }}</span>
-              <span class="s-badge" v-if="!isCompleted">Yeni</span>
-              <span class="s-time">{{ timeAgo(survey.created_at) }}</span>
-            </div>
-            <div class="s-handle">{{ getCreatorHandle(survey) }}</div>
-          </div>
-          <span></span>
+          <SurveyUserHeader
+            :avatar-color="getAvatarColor(survey.id)"
+            :avatar-text="getCreatorName(survey).charAt(0).toUpperCase()"
+            :display-name="getCreatorName(survey)"
+            :handle="getCreatorHandle(survey)"
+            :time-ago="timeAgo(survey.created_at)"
+            :is-new="!isCompleted"
+          />
         </div>
 
-        <h3 class="s-question-text">
-          {{ survey.questions && survey.questions.length > 0 ? survey.questions[0].text : 'Soru bulunamadı' }}
-        </h3>
+        <div
+          v-for="(q, qIdx) in survey.questions || []"
+          :key="q.id"
+          class="survey-detail-question"
+        >
+          <SurveyQuestionBlock
+            :survey-id="survey.id"
+            :question="q"
+            :question-count="1"
+            :question-index="Number(qIdx) + 1"
+            :can-go-prev="false"
+            :can-go-next="false"
+            :selected-answer="(q.id != null ? givenAnswers[String(q.id)] : '') || ''"
+            :is-completed="isCompleted"
+            :is-answer-locked="Boolean(q.id != null && lockedQuestionIds.has(String(q.id)))"
+            :get-percent="(opt: any) => getTotalVotes(q) > 0 ? Math.round((opt.vote_count / getTotalVotes(q)) * 100) : 0"
+            :api-base="API_BASE"
+            @select="handleQuestionSelect"
+          />
 
-        <div v-if="survey.questions && survey.questions.length > 0 && survey.questions[0].type === 'single_choice'" class="s-poll">
-          <label
-            v-for="opt in survey.questions[0].options"
-            :key="opt.id"
-            class="s-option-btn"
-            :class="{ 'is-selected': givenAnswer === opt.id, 'is-disabled': isCompleted }"
+          <div
+            class="s-actions"
+            v-if="q.type === 'single_choice' && (isCompleted || qIdx === (survey.questions?.length || 0) - 1)"
           >
-            <div
-              class="s-option-fill"
-              :class="{ 'is-visible': isCompleted }"
-              :style="`width: ${isCompleted && getTotalVotes(survey.questions[0]) > 0 ? Math.round((opt.vote_count / getTotalVotes(survey.questions[0])) * 100) : 0}%`"
-            ></div>
-            <div class="s-option-content">
-              <input
-                type="radio"
-                :name="'survey_' + survey.id"
-                :value="opt.id"
-                v-model="givenAnswer"
-                @change="submitVote(opt.id)"
-                :disabled="isCompleted"
-                style="display: none;"
-              />
-              <div class="s-radio" :class="{ checked: givenAnswer === opt.id }"></div>
-              <span class="s-option-text">{{ opt.text }}</span>
-              <span v-if="isCompleted" class="s-option-percent">
-                {{ getTotalVotes(survey.questions[0]) > 0 ? Math.round((opt.vote_count / getTotalVotes(survey.questions[0])) * 100) : 0 }}%
-              </span>
-            </div>
-          </label>
-
-          <div class="s-actions">
-            <p v-if="isCompleted" class="s-total-votes">Toplam {{ getTotalVotes(survey.questions[0]) }} Oy</p>
+            <p
+              v-if="isCompleted || (q.id != null && lockedQuestionIds.has(String(q.id)))"
+              class="s-total-votes"
+            >
+              Toplam {{ getTotalVotes(q) }} Oy
+            </p>
             <button
+              v-if="qIdx === (survey.questions?.length || 0) - 1"
               class="s-share-btn"
               @click="copyLink"
               :title="copiedLink ? 'Kopyalandı!' : 'Linki Kopyala'"
@@ -260,12 +315,38 @@ const getAvatarColor = (id: string) => {
   background-color: var(--color-white);
   border-bottom: 1px solid var(--border-color);
   padding: var(--spacing-4) 0;
+  padding-top: max(var(--spacing-4), env(safe-area-inset-top, 0px));
+}
+.header-inner {
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+}
+.logo-link {
+  text-decoration: none;
+  min-width: 0;
 }
 .logo {
   font-size: var(--font-size-2xl);
   font-weight: 700;
   color: var(--primary-color);
   letter-spacing: -0.05em;
+}
+.back-btn-wrap {
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.back-btn {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.survey-main {
+  max-width: 600px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: var(--spacing-8);
+  padding-bottom: max(var(--spacing-8), env(safe-area-inset-bottom, 0px));
 }
 
 .feed-card {
@@ -276,50 +357,26 @@ const getAvatarColor = (id: string) => {
   overflow: hidden;
   padding: 24px;
 }
+
+@media (max-width: 480px) {
+  .logo {
+    font-size: var(--font-size-xl);
+  }
+  .feed-card {
+    padding: 16px 14px;
+    margin-bottom: var(--spacing-4);
+  }
+  .survey-main {
+    margin-top: var(--spacing-4);
+  }
+}
 .s-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
   margin-bottom: 14px;
 }
-.s-avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 16px;
-  flex-shrink: 0;
-}
-.s-meta {
-  flex: 1;
-}
-.s-author-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.s-author-name {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-color);
-}
-.s-badge {
-  background: var(--primary-color);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 6px;
-}
-.s-time,
-.s-handle {
-  font-size: 13px;
-  color: var(--text-color-muted);
+.survey-detail-question + .survey-detail-question {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
 }
 .s-share-btn {
   width: 34px;
@@ -339,86 +396,6 @@ const getAvatarColor = (id: string) => {
 }
 .s-share-btn.copied {
   color: var(--secondary-color);
-}
-.s-question-text {
-  margin: 0 0 16px 0;
-  color: var(--text-color);
-}
-.s-poll {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.s-option-btn {
-  position: relative;
-  padding: 0;
-  border: 2px solid var(--border-color);
-  border-radius: 9999px;
-  cursor: pointer;
-  overflow: hidden;
-  transition: all 0.2s ease;
-}
-.s-option-btn:not(.is-disabled):hover {
-  border-color: var(--primary-color);
-}
-.s-option-btn.is-selected {
-  border-color: var(--primary-color);
-}
-.s-option-btn.is-disabled {
-  cursor: default;
-}
-.s-option-content {
-  position: relative;
-  z-index: 2;
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-.s-option-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  background: #c8c4bd;
-  opacity: 0;
-  z-index: 1;
-  transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.s-option-fill.is-visible {
-  opacity: 0.92;
-}
-.s-radio {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 2px solid var(--border-color);
-  margin-right: 12px;
-  transition: all 0.2s;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.s-radio.checked {
-  border-color: var(--primary-color);
-}
-.s-radio.checked::after {
-  content: '';
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background-color: var(--primary-color);
-}
-.s-option-text {
-  font-weight: 500;
-  flex: 1;
-}
-.s-option-percent {
-  font-weight: 700;
-  font-size: 14px;
 }
 .s-total-votes {
   font-size: 12px;

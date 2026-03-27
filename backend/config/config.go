@@ -1,5 +1,17 @@
 package config
 
+import "os"
+
+const EnvUploadDir = "OPTYOO_UPLOAD_DIR"
+
+// UploadDir returns the root directory for uploaded blobs (disk store). Override with OPTYOO_UPLOAD_DIR.
+func UploadDir() string {
+	if s := os.Getenv(EnvUploadDir); s != "" {
+		return s
+	}
+	return "data/uploads"
+}
+
 type Theme string
 
 const (

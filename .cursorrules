@@ -14,17 +14,17 @@ This is a Monorepo.
   - Generates secure IDs using `crypto/rand` (8-byte hex) under `auth.go`.
   - Enforces mandatory single-question logic limit (`survey.go`).
   - Computes `vote_count` using nested SQL queries (`survey.go`) to natively return poll results array in API JSON.
-  - Duplicate vote prevention: `SubmitAnswersHandler` returns **403** if an answer row already exists for the same `survey_id` + `user_id` (checked before insert; current DDL does not define a DB-level UNIQUE on that pair).
+  - Duplicate answer prevention: `SubmitAnswersHandler` returns **403** if an answer row already exists for the same `survey_id` + `user_id` + `question_id` (transaction + per-row check before insert).
 - `/frontend/`: Vue 3 application running on port 5173.
   - Deep localStorage integration via Pinia store: `optiyoo_user` for session; `completed_polls_<user.id>` for client-side completion cache (must stay consistent with API `user_answer` / 403).
-  - Fetches `/api/surveys?user_id=...` so the feed can hydrate `user_answer` and lock voted polls.
+  - Fetches `/api/surveys?user_id=...` so the feed can hydrate `user_answers` / `user_answer` and lock answered questions; `completed_polls_*` marks surveys where every question has a stored answer.
   - Poll creation lives in `CreateSurveyModal.vue` on the dashboard (no dedicated `/create` route). Shareable survey URL: `/s/:id` → `SurveyView.vue`.
   - Renders Twitter-like poll UI with horizontal CSS percentage bars on radio labels; instant POST on choice instead of a separate form submit.
 
 ## Core Business Requirements
 1. **Single Question Policy:** Every created survey is essentially a "Poll" (1 question strictly enforced).
 2. **Open-Ended Restriction:** `config.AppConfig.AllowOpenEndedQuestions` is `false` by default. Frontend hits `/api/config` to lock the text question builder; backend rejects text questions on create when disabled.
-3. **No Duplicate Voting:** Backend rejects a second submission with **403**; frontend persists locked state via `completed_polls_<userId>` and server-provided `user_answer` when `user_id` is passed on list/detail GET.
+3. **No Duplicate Answers (per question):** Backend rejects a repeat answer for the same survey question and user with **403**; frontend locks per question and uses `completed_polls_<userId>` only when all questions in that survey are answered, with `user_answers` from list/detail GET as source of truth for partial progress.
 4. **Reward System (roadmap):** Product direction includes awarding **+5 OPT** per vote and surfacing balance in the profile. **Not implemented** in the current schema or `SubmitAnswersHandler`—do not assume a `points` column or automatic credit until migrations and handlers add them.
 
 ## Common Operations
