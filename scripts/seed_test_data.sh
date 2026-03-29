@@ -26,9 +26,21 @@ request_json() {
     -d "$payload"
 }
 
+request_json_auth() {
+  local method="$1"
+  local url="$2"
+  local payload="$3"
+  local bearer="$4"
+  curl -sS -X "$method" "$url" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${bearer}" \
+    -d "$payload"
+}
+
 echo "Seeding users and surveys on: $BASE_URL"
 
 declare -a USER_IDS=()
+declare -a USER_TOKENS=()
 
 for i in $(seq 1 "$USER_COUNT"); do
   email="testuser${i}@optiyoo.local"
@@ -41,6 +53,7 @@ EOF
 
   register_resp="$(request_json "POST" "$REGISTER_URL" "$register_payload" || true)"
   user_id="$(json_field "$register_resp" "id" || true)"
+  token="$(json_field "$register_resp" "token" || true)"
 
   # If user already exists, try login and reuse existing account.
   if [[ -z "$user_id" ]]; then
@@ -50,21 +63,24 @@ EOF
 )
     login_resp="$(request_json "POST" "$LOGIN_URL" "$login_payload" || true)"
     user_id="$(json_field "$login_resp" "id" || true)"
+    token="$(json_field "$login_resp" "token" || true)"
   fi
 
-  if [[ -z "$user_id" ]]; then
+  if [[ -z "$user_id" || -z "$token" ]]; then
     echo "Kullanıcı oluşturulamadı/giriş yapılamadı: $email"
     echo "Register response: $register_resp"
     exit 1
   fi
 
   USER_IDS+=("$user_id")
+  USER_TOKENS+=("$token")
   echo "User hazır: $email -> $user_id"
 done
 
 for i in $(seq 1 "$SURVEY_COUNT"); do
   idx=$(( (i - 1) % USER_COUNT ))
   creator_id="${USER_IDS[$idx]}"
+  creator_token="${USER_TOKENS[$idx]}"
 
   survey_payload=$(cat <<EOF
 {
@@ -86,7 +102,7 @@ for i in $(seq 1 "$SURVEY_COUNT"); do
 EOF
 )
 
-  survey_resp="$(request_json "POST" "$SURVEY_URL" "$survey_payload" || true)"
+  survey_resp="$(request_json_auth "POST" "$SURVEY_URL" "$survey_payload" "$creator_token" || true)"
   survey_id="$(json_field "$survey_resp" "id" || true)"
 
   if [[ -z "$survey_id" ]]; then

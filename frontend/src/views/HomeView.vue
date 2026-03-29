@@ -6,6 +6,8 @@ import { useAuthStore } from '../stores/auth'
 const router = useRouter()
 const authStore = useAuthStore()
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+
 const isLoginMode = ref(true)
 const email = ref('test3@test.com')
 const password = ref('123')
@@ -37,7 +39,7 @@ const handleAuth = async () => {
   }
 
   try {
-    const res = await fetch(`http://localhost:8080${endpoint}`, {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -48,8 +50,24 @@ const handleAuth = async () => {
        throw new Error(text || 'Kullanıcı adı veya şifre hatalı.')
     }
     
-    const data = await res.json()
-    authStore.setUser(data)
+    const body = await res.json() as {
+      id: string
+      name: string
+      email: string
+      username?: string
+      can_create_multi_question_surveys?: boolean
+      token: string
+    }
+    authStore.setUser(
+      {
+        id: body.id,
+        name: body.name,
+        email: body.email,
+        username: body.username,
+        can_create_multi_question_surveys: body.can_create_multi_question_surveys
+      },
+      body.token
+    )
     router.push('/')
     
   } catch (e: any) {

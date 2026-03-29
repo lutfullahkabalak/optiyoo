@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { defineAsyncComponent, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+
+const AvatarCropModal = defineAsyncComponent(() => import('../components/AvatarCropModal.vue'))
 import { useAuthStore } from '../stores/auth'
+import {
+  absoluteApiUrl,
+  DEFAULT_AVATAR_COLORS,
+  hashAvatarColor,
+  resolveAvatarBackground,
+  usernameInitial
+} from '../utils/avatar'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
@@ -13,14 +22,12 @@ const displayNameMsg = ref('')
 const usernameMsg = ref('')
 const emailMsg = ref('')
 const passwordMsg = ref('')
+const avatarMsg = ref('')
 
-const displayNameCurrentPw = ref('')
 const newDisplayName = ref('')
 
-const usernameCurrentPw = ref('')
 const newUsername = ref('')
 
-const emailCurrentPw = ref('')
 const newEmail = ref('')
 
 const passwordCurrentPw = ref('')
@@ -31,6 +38,12 @@ const busyDisplayName = ref(false)
 const busyUser = ref(false)
 const busyEmail = ref(false)
 const busyPassword = ref(false)
+const busyAvatar = ref(false)
+
+const selectedAvatarColor = ref('#6366f1')
+const cropOpen = ref(false)
+const cropFile = ref<File | null>(null)
+const avatarFileInput = ref<HTMLInputElement | null>(null)
 
 const syncFormDefaults = () => {
   const u = authStore.user
@@ -38,6 +51,24 @@ const syncFormDefaults = () => {
   newDisplayName.value = u.name || ''
   newUsername.value = u.username || ''
   newEmail.value = u.email || ''
+  if (u.avatar_color && /^#[0-9A-Fa-f]{6}$/i.test(u.avatar_color)) {
+    selectedAvatarColor.value = u.avatar_color
+  } else {
+    selectedAvatarColor.value = hashAvatarColor(u.id)
+  }
+}
+
+const refreshProfile = async () => {
+  const uid = authStore.user?.id
+  if (!uid) return false
+  const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(uid)}`, {
+    headers: authStore.authHeadersGet()
+  })
+  if (!res.ok) return false
+  const data = await res.json()
+  authStore.setUser({ ...authStore.user!, ...data })
+  syncFormDefaults()
+  return true
 }
 
 onMounted(async () => {
@@ -47,9 +78,9 @@ onMounted(async () => {
   }
   syncFormDefaults()
   try {
-    const res = await fetch(
-      `${API_BASE}/api/users/${encodeURIComponent(authStore.user.id)}?user_id=${encodeURIComponent(authStore.user.id)}`
-    )
+    const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(authStore.user.id)}`, {
+      headers: authStore.authHeadersGet()
+    })
     if (!res.ok) {
       loadError.value = await res.text()
       return
@@ -64,7 +95,7 @@ onMounted(async () => {
 })
 
 const patchUser = async (
-  body: Record<string, string>,
+  body: Record<string, unknown>,
   setBusy: (v: boolean) => void,
   setMsg: (v: string) => void
 ) => {
@@ -75,8 +106,8 @@ const patchUser = async (
   try {
     const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(uid)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: uid, ...body })
+      headers: authStore.authHeadersJson(),
+      body: JSON.stringify(body)
     })
     const text = await res.text()
     if (!res.ok) {
@@ -86,9 +117,6 @@ const patchUser = async (
     const data = JSON.parse(text)
     authStore.setUser(data)
     syncFormDefaults()
-    displayNameCurrentPw.value = ''
-    usernameCurrentPw.value = ''
-    emailCurrentPw.value = ''
     passwordCurrentPw.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
@@ -107,15 +135,7 @@ const saveDisplayName = () => {
     displayNameMsg.value = 'Görünen ad gerekli.'
     return
   }
-  if (!displayNameCurrentPw.value) {
-    displayNameMsg.value = 'Mevcut şifrenizi girin.'
-    return
-  }
-  patchUser(
-    { current_password: displayNameCurrentPw.value, name: n },
-    (v) => (busyDisplayName.value = v),
-    (m) => (displayNameMsg.value = m)
-  )
+  patchUser({ name: n }, (v) => (busyDisplayName.value = v), (m) => (displayNameMsg.value = m))
 }
 
 const saveUsername = () => {
@@ -124,15 +144,7 @@ const saveUsername = () => {
     usernameMsg.value = 'Kullanıcı adı gerekli.'
     return
   }
-  if (!usernameCurrentPw.value) {
-    usernameMsg.value = 'Mevcut şifrenizi girin.'
-    return
-  }
-  patchUser(
-    { current_password: usernameCurrentPw.value, username: u },
-    (v) => (busyUser.value = v),
-    (m) => (usernameMsg.value = m)
-  )
+  patchUser({ username: u }, (v) => (busyUser.value = v), (m) => (usernameMsg.value = m))
 }
 
 const saveEmail = () => {
@@ -141,15 +153,7 @@ const saveEmail = () => {
     emailMsg.value = 'E-posta gerekli.'
     return
   }
-  if (!emailCurrentPw.value) {
-    emailMsg.value = 'Mevcut şifrenizi girin.'
-    return
-  }
-  patchUser(
-    { current_password: emailCurrentPw.value, email: e },
-    (v) => (busyEmail.value = v),
-    (m) => (emailMsg.value = m)
-  )
+  patchUser({ email: e }, (v) => (busyEmail.value = v), (m) => (emailMsg.value = m))
 }
 
 const savePassword = () => {
@@ -172,11 +176,68 @@ const savePassword = () => {
   )
 }
 
-const avatarColor = (id: string) => {
-  const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#ef4444', '#14b8a6']
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash)
-  return colors[Math.abs(hash) % colors.length]
+const openAvatarPicker = () => {
+  avatarFileInput.value?.click()
+}
+
+const onAvatarFileChange = (e: Event) => {
+  const t = e.target as HTMLInputElement
+  const f = t.files?.[0]
+  t.value = ''
+  if (!f) return
+  cropFile.value = f
+  cropOpen.value = true
+}
+
+const onAvatarCropped = async (blob: Blob) => {
+  avatarMsg.value = ''
+  busyAvatar.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', blob, 'avatar.jpg')
+    const c = selectedAvatarColor.value.trim()
+    if (c && /^#[0-9A-Fa-f]{6}$/i.test(c)) {
+      fd.append('avatar_color', c)
+    }
+    const res = await fetch(`${API_BASE}/api/user-media`, {
+      method: 'POST',
+      headers: authStore.authHeadersMultipart(),
+      body: fd
+    })
+    const text = await res.text()
+    if (!res.ok) {
+      avatarMsg.value = text || 'Yükleme başarısız.'
+      return
+    }
+    await refreshProfile()
+    avatarMsg.value = 'Profil resmi güncellendi.'
+  } catch (e) {
+    avatarMsg.value = 'Bağlantı hatası.'
+    console.error(e)
+  } finally {
+    busyAvatar.value = false
+  }
+}
+
+const saveAvatarColor = () => {
+  const c = selectedAvatarColor.value.trim()
+  if (c && !/^#[0-9A-Fa-f]{6}$/i.test(c)) {
+    avatarMsg.value = 'Geçerli bir renk seçin (#RRGGBB).'
+    return
+  }
+  patchUser({ avatar_color: c }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
+}
+
+const clearStoredAvatarColor = () => {
+  patchUser({ avatar_color: '' }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
+}
+
+const removeAvatarPhoto = () => {
+  if (!authStore.user?.avatar_url) {
+    avatarMsg.value = 'Yüklü bir fotoğraf yok.'
+    return
+  }
+  patchUser({ remove_avatar: true }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
 }
 </script>
 
@@ -194,12 +255,25 @@ const avatarColor = (id: string) => {
     <main class="container settings-main">
       <div v-if="loadError" class="banner-error">{{ loadError }}</div>
 
+      <AvatarCropModal v-model="cropOpen" :file="cropFile" @apply="onAvatarCropped" />
+
       <div class="profile-head card">
         <div
           class="profile-avatar"
-          :style="{ background: avatarColor(authStore.user.id) }"
+          :class="{ 'profile-avatar--photo': !!authStore.user.avatar_url }"
+          :style="
+            authStore.user.avatar_url
+              ? undefined
+              : { background: resolveAvatarBackground(authStore.user.avatar_color, authStore.user.id) }
+          "
         >
-          {{ authStore.user.name.charAt(0).toUpperCase() }}
+          <img
+            v-if="authStore.user.avatar_url"
+            class="profile-avatar-img"
+            :src="absoluteApiUrl(API_BASE, authStore.user.avatar_url)"
+            alt=""
+          />
+          <template v-else>{{ usernameInitial(authStore.user.username) }}</template>
         </div>
         <div>
           <h1 class="profile-title">Profil ayarları</h1>
@@ -208,15 +282,93 @@ const avatarColor = (id: string) => {
       </div>
 
       <section class="card settings-section">
+        <h2>Profil fotoğrafı ve renk</h2>
+        <p class="hint">
+          Fotoğraf seçtiğinizde daire içinde kırpma penceresi açılır. Fotoğraf yoksa kullanıcı adınızın baş harfi
+          gösterilir. Arka plan rengini aşağıdan seçebilir veya kayıtlı rengi sıfırlayıp otomatik palete dönebilirsiniz.
+        </p>
+        <div class="avatar-preview-row">
+          <div
+            class="avatar-preview-circle"
+            :class="{ 'avatar-preview-circle--photo': !!authStore.user.avatar_url }"
+            :style="
+              authStore.user.avatar_url
+                ? undefined
+                : { background: resolveAvatarBackground(selectedAvatarColor, authStore.user.id) }
+            "
+          >
+            <img
+              v-if="authStore.user.avatar_url"
+              class="avatar-preview-img"
+              :src="absoluteApiUrl(API_BASE, authStore.user.avatar_url)"
+              alt=""
+            />
+            <span v-else class="avatar-preview-letter">{{ usernameInitial(authStore.user.username) }}</span>
+          </div>
+          <div class="avatar-preview-actions">
+            <input
+              ref="avatarFileInput"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              class="visually-hidden"
+              @change="onAvatarFileChange"
+            />
+            <button type="button" class="btn btn-primary" :disabled="busyAvatar" @click="openAvatarPicker">
+              {{ busyAvatar ? 'İşleniyor…' : 'Resim seç' }}
+            </button>
+            <button
+              v-if="authStore.user.avatar_url"
+              type="button"
+              class="btn btn-outline"
+              :disabled="busyAvatar"
+              @click="removeAvatarPhoto"
+            >
+              Fotoğrafı kaldır
+            </button>
+          </div>
+        </div>
+        <p class="hint label-tight">Arka plan rengi (harf gösteriminde)</p>
+        <div class="avatar-swatches" role="list">
+          <button
+            v-for="col in DEFAULT_AVATAR_COLORS"
+            :key="col"
+            type="button"
+            class="swatch-btn"
+            :style="{ background: col }"
+            :title="col"
+            :aria-pressed="selectedAvatarColor.toLowerCase() === col.toLowerCase()"
+            @click="selectedAvatarColor = col"
+          />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Özel renk</label>
+          <input v-model="selectedAvatarColor" type="color" class="form-control color-native" />
+        </div>
+        <div class="avatar-save-row">
+          <button type="button" class="btn btn-primary" :disabled="busyAvatar" @click="saveAvatarColor">
+            {{ busyAvatar ? 'Kaydediliyor…' : 'Rengi kaydet' }}
+          </button>
+          <button
+            v-if="authStore.user.avatar_color"
+            type="button"
+            class="btn btn-outline"
+            :disabled="busyAvatar"
+            @click="clearStoredAvatarColor"
+          >
+            Kayıtlı rengi sıfırla
+          </button>
+        </div>
+        <p v-if="avatarMsg" class="msg" :class="{ ok: avatarMsg.includes('güncellendi') || avatarMsg === 'Kaydedildi.' }">
+          {{ avatarMsg }}
+        </p>
+      </section>
+
+      <section class="card settings-section">
         <h2>Görünen ad</h2>
         <p class="hint">Profil ve kartlarda görünen adınız (ad soyad).</p>
         <div class="form-group">
           <label class="form-label">Görünen ad</label>
           <input v-model="newDisplayName" type="text" class="form-control" autocomplete="name" maxlength="255" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Mevcut şifre</label>
-          <input v-model="displayNameCurrentPw" type="password" class="form-control" autocomplete="current-password" />
         </div>
         <p v-if="displayNameMsg" class="msg" :class="{ ok: displayNameMsg === 'Kaydedildi.' }">{{ displayNameMsg }}</p>
         <button type="button" class="btn btn-primary" :disabled="busyDisplayName" @click="saveDisplayName">
@@ -231,10 +383,6 @@ const avatarColor = (id: string) => {
           <label class="form-label">Yeni kullanıcı adı</label>
           <input v-model="newUsername" type="text" class="form-control" autocomplete="username" />
         </div>
-        <div class="form-group">
-          <label class="form-label">Mevcut şifre</label>
-          <input v-model="usernameCurrentPw" type="password" class="form-control" autocomplete="current-password" />
-        </div>
         <p v-if="usernameMsg" class="msg" :class="{ ok: usernameMsg === 'Kaydedildi.' }">{{ usernameMsg }}</p>
         <button type="button" class="btn btn-primary" :disabled="busyUser" @click="saveUsername">
           {{ busyUser ? 'Kaydediliyor…' : 'Kullanıcı adını kaydet' }}
@@ -247,10 +395,6 @@ const avatarColor = (id: string) => {
         <div class="form-group">
           <label class="form-label">Yeni e-posta</label>
           <input v-model="newEmail" type="email" class="form-control" autocomplete="email" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Mevcut şifre</label>
-          <input v-model="emailCurrentPw" type="password" class="form-control" autocomplete="current-password" />
         </div>
         <p v-if="emailMsg" class="msg" :class="{ ok: emailMsg === 'Kaydedildi.' }">{{ emailMsg }}</p>
         <button type="button" class="btn btn-primary" :disabled="busyEmail" @click="saveEmail">
@@ -350,6 +494,101 @@ const avatarColor = (id: string) => {
   font-size: 1.25rem;
   color: #fff;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.profile-avatar--photo {
+  background: var(--border-color, #e5e7eb);
+}
+.profile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.avatar-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-4);
+}
+.avatar-preview-circle {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.35rem;
+  color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+.avatar-preview-circle--photo {
+  background: var(--border-color, #e5e7eb);
+}
+.avatar-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.avatar-preview-letter {
+  line-height: 1;
+}
+.avatar-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+.label-tight {
+  margin-bottom: var(--spacing-2);
+}
+.avatar-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-4);
+}
+.swatch-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.swatch-btn:hover {
+  transform: scale(1.06);
+}
+.swatch-btn[aria-pressed='true'] {
+  border-color: var(--text-color);
+  box-shadow: 0 0 0 2px var(--color-white), 0 0 0 4px var(--primary-color);
+}
+.color-native {
+  height: 44px;
+  padding: var(--spacing-1);
+  cursor: pointer;
+}
+.avatar-save-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-2);
 }
 .profile-title {
   margin: 0;

@@ -12,6 +12,7 @@ import (
 	"os"
 	"optiyoo-backend/db"
 	"optiyoo-backend/imagemin"
+	"optiyoo-backend/middleware"
 	"optiyoo-backend/storage"
 	"strconv"
 	"strings"
@@ -83,14 +84,19 @@ func UploadMediaHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	userID := strings.TrimSpace(r.FormValue("user_id"))
+	uid, ok := middleware.UserIDFromContext(r.Context())
+	if !ok || uid == "" {
+		http.Error(w, "Oturum gerekli.", http.StatusUnauthorized)
+		return
+	}
+
 	surveyID := strings.TrimSpace(r.FormValue("survey_id"))
 	kind := strings.TrimSpace(strings.ToLower(r.FormValue("kind")))
 	refID := strings.TrimSpace(r.FormValue("ref_id"))
 
-	if userID == "" || surveyID == "" || kind == "" || refID == "" {
+	if surveyID == "" || kind == "" || refID == "" {
 		logMediaf("eksik alan: survey_id=%q kind=%q", surveyID, kind)
-		http.Error(w, "user_id, survey_id, kind ve ref_id zorunludur.", http.StatusBadRequest)
+		http.Error(w, "survey_id, kind ve ref_id zorunludur.", http.StatusBadRequest)
 		return
 	}
 	if kind != "question" && kind != "option" {
@@ -111,8 +117,8 @@ func UploadMediaHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Anket doğrulanamadı.", http.StatusInternalServerError)
 		return
 	}
-	if creatorID != userID {
-		logMediaf("yetkisiz: survey_id=%s creator=%s user_id=%s", surveyID, creatorID, userID)
+	if creatorID != uid {
+		logMediaf("yetkisiz: survey_id=%s creator=%s uid=%s", surveyID, creatorID, uid)
 		http.Error(w, "Bu anket için görsel yükleme yetkiniz yok.", http.StatusForbidden)
 		return
 	}

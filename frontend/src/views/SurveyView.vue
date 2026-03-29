@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import SurveyUserHeader from '../components/survey/SurveyUserHeader.vue'
 import SurveyQuestionBlock from '../components/survey/SurveyQuestionBlock.vue'
+import { absoluteApiUrl, resolveAvatarBackground, usernameInitial } from '../utils/avatar'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
@@ -45,8 +46,10 @@ onMounted(async () => {
   }
 
   try {
+    const uid = authStore.user?.id
     const res = await fetch(
-      `${API_BASE}/api/surveys/${surveyId}?user_id=${authStore.user?.id}`
+      `${API_BASE}/api/surveys/${surveyId}${uid ? `?user_id=${encodeURIComponent(uid)}` : ''}`,
+      { headers: uid ? authStore.authHeadersGet() : {} }
     )
     if (res.ok) {
       survey.value = await res.json()
@@ -112,14 +115,13 @@ const submitSingleAnswer = async (questionId: string, optionId: string) => {
 
   isSubmitting.value = true
   const payload = {
-    user_id: authStore.user?.id,
     answers: [{ question_id: questionId, value: optionId }]
   }
 
   try {
     const res = await fetch(`${API_BASE}/api/surveys/${surveyId}/answers`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authStore.authHeadersJson(),
       body: JSON.stringify(payload)
     })
 
@@ -133,8 +135,10 @@ const submitSingleAnswer = async (questionId: string, optionId: string) => {
         syncCompletedLocalStorage(true)
       }
     } else if (res.status === 403) {
+      const uid = authStore.user?.id
       const r = await fetch(
-        `${API_BASE}/api/surveys/${surveyId}?user_id=${authStore.user?.id}`
+        `${API_BASE}/api/surveys/${surveyId}${uid ? `?user_id=${encodeURIComponent(uid)}` : ''}`,
+        { headers: uid ? authStore.authHeadersGet() : {} }
       )
       if (r.ok) {
         survey.value = await r.json()
@@ -189,15 +193,9 @@ const timeAgo = (dateStr: string) => {
   return `${Math.floor(diff / 86400)}g`
 }
 
-const avatarColors = [
-  '#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#ef4444', '#14b8a6'
-]
-
-const getAvatarColor = (id: string) => {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash)
-  return avatarColors[Math.abs(hash) % avatarColors.length]
-}
+const creatorAvatarImageUrl = (s: any) => absoluteApiUrl(API_BASE, s?.creator_avatar_url)
+const creatorAvatarBg = (s: any) => resolveAvatarBackground(s?.creator_avatar_color, s?.creator_id || s?.id)
+const creatorAvatarLetter = (s: any) => usernameInitial(s?.creator_username)
 </script>
 
 <template>
@@ -234,8 +232,9 @@ const getAvatarColor = (id: string) => {
 
         <div class="s-header">
           <SurveyUserHeader
-            :avatar-color="getAvatarColor(survey.id)"
-            :avatar-text="getCreatorName(survey).charAt(0).toUpperCase()"
+            :avatar-color="creatorAvatarBg(survey)"
+            :avatar-text="creatorAvatarLetter(survey)"
+            :avatar-image-url="creatorAvatarImageUrl(survey)"
             :display-name="getCreatorName(survey)"
             :handle="getCreatorHandle(survey)"
             :time-ago="timeAgo(survey.created_at)"

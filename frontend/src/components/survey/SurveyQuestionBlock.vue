@@ -89,6 +89,8 @@ const onRowClick = (optId: string | undefined) => {
           :src="questionImageSrc"
           alt=""
           class="question-banner-img"
+          loading="lazy"
+          decoding="async"
         />
         <p class="question-title">{{ question?.text || 'Soru bulunamadı' }}</p>
 
@@ -125,6 +127,8 @@ const onRowClick = (optId: string | undefined) => {
                 :src="mediaSrc(opt.image_url)"
                 alt=""
                 class="question-opt-thumb"
+                loading="lazy"
+                decoding="async"
               />
               <span class="question-opt-text">{{ opt.text }}</span>
               <span class="question-opt-pct" :class="{ 'is-visible': pollFrozen() }">

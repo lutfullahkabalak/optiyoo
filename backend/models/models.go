@@ -9,6 +9,8 @@ type User struct {
 	Password                      string    `json:"password,omitzero"` // Yalnızca istekte alınır, DB'ye yazılır, yanıtta boşaltılarak dışarı sızdırılmaz
 	Name                          string    `json:"name"`
 	Username                      string    `json:"username"`
+	AvatarURL                     string    `json:"avatar_url,omitempty"`
+	AvatarColor                   string    `json:"avatar_color,omitempty"` // #RRGGBB; boşsa istemci varsayılan paleti kullanır
 	CanCreateMultiQuestionSurveys bool      `json:"can_create_multi_question_surveys"`
 	CreatedAt                     time.Time `json:"created_at,omitzero"`
 	UpdatedAt                     time.Time `json:"updated_at,omitzero"`
@@ -18,8 +20,10 @@ type User struct {
 type Survey struct {
 	ID              string     `json:"id,omitzero"`
 	CreatorID       string     `json:"creator_id"` // Anket oluşturan kullanıcının ID'si
-	CreatorName     string     `json:"creator_name,omitempty"`
-	CreatorUsername string     `json:"creator_username,omitempty"`
+	CreatorName          string `json:"creator_name,omitempty"`
+	CreatorUsername      string `json:"creator_username,omitempty"`
+	CreatorAvatarURL     string `json:"creator_avatar_url,omitempty"`
+	CreatorAvatarColor   string `json:"creator_avatar_color,omitempty"`
 	Questions       []Question `json:"questions,omitzero"`
 	// UserAnswer ilk sorunun seçeneği (geriye dönük); çoklu soruda tümü için UserAnswers kullanın.
 	UserAnswer  *string           `json:"user_answer,omitempty"`

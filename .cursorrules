@@ -11,13 +11,14 @@
 ## Project Architecture
 This is a Monorepo.
 - `/backend/`: Go API server running on port 8080.
+  - Auth: bcrypt passwords; JWT (`Authorization: Bearer`) on mutating routes and on `GET`/`PATCH /api/users/{id}`; `user_id` query on survey list/detail requires a matching Bearer. Set `OPTYOO_JWT_SECRET` (prod) and `OPTYOO_CORS_ORIGIN` (frontend origin).
   - Generates secure IDs using `crypto/rand` (8-byte hex) under `auth.go`.
   - Enforces mandatory single-question logic limit (`survey.go`).
   - Computes `vote_count` using nested SQL queries (`survey.go`) to natively return poll results array in API JSON.
   - Duplicate answer prevention: `SubmitAnswersHandler` returns **403** if an answer row already exists for the same `survey_id` + `user_id` + `question_id` (transaction + per-row check before insert).
 - `/frontend/`: Vue 3 application running on port 5173.
-  - Deep localStorage integration via Pinia store: `optiyoo_user` for session; `completed_polls_<user.id>` for client-side completion cache (must stay consistent with API `user_answer` / 403).
-  - Fetches `/api/surveys?user_id=...` so the feed can hydrate `user_answers` / `user_answer` and lock answered questions; `completed_polls_*` marks surveys where every question has a stored answer.
+  - Deep localStorage integration via Pinia store: `optiyoo_user` + `optiyoo_token` (JWT); `completed_polls_<user.id>` for client-side completion cache (must stay consistent with API `user_answer` / 403).
+  - Fetches `/api/surveys?user_id=...` with `Authorization` when logged in so the feed can hydrate `user_answers` / `user_answer` and lock answered questions; `completed_polls_*` marks surveys where every question has a stored answer.
   - Poll creation lives in `CreateSurveyModal.vue` on the dashboard (no dedicated `/create` route). Shareable survey URL: `/s/:id` → `SurveyView.vue`.
   - Renders Twitter-like poll UI with horizontal CSS percentage bars on radio labels; instant POST on choice instead of a separate form submit.
 

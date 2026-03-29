@@ -10,14 +10,23 @@ import (
 	"optiyoo-backend/storage"
 )
 
-// corsMiddleware allows cross-origin requests from the Vue frontend
+// corsMiddleware allows the configured browser origin (OPTYOO_CORS_ORIGIN) to call the API with Authorization.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		allowOrigin := config.ResolveCORSAllowOrigin(r.Header.Get("Origin"))
+		if allowOrigin == "" {
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+		w.Header().Set("Vary", "Origin")
 
-		// Preflight OPTIONS requests 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -30,6 +39,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 func main() {
 	log.Println("[optiyoo] veritabanı başlatılıyor…")
 	db.InitDB()
+	if config.UsingDevJWTSecret() {
+		log.Println("[optiyoo] UYARI: OPTYOO_JWT_SECRET tanımlı değil; geliştirme anahtarı kullanılıyor. Üretimde güçlü bir gizli anahtar ayarlayın.")
+	}
 	uploadRoot := config.UploadDir()
 	ds, err := storage.NewDiskStore(uploadRoot)
 	if err != nil {
@@ -38,31 +50,32 @@ func main() {
 	handlers.BlobStore = ds
 	log.Printf("[optiyoo] medya dizini: %s\n", uploadRoot)
 
-	// Modern Go 1.22+ ServeMux Routing
 	mux := http.NewServeMux()
 
-	// Authenticated Routes
 	mux.HandleFunc("POST /api/register", handlers.RegisterHandler)
 	mux.HandleFunc("POST /api/login", handlers.LoginHandler)
-	mux.HandleFunc("GET /api/users/{id}", handlers.GetUserHandler)
-	mux.HandleFunc("PATCH /api/users/{id}", handlers.PatchUserHandler)
 
-	// Survey Endpoints
+	mux.Handle("GET /api/users/{id}", middleware.RequireAuth(http.HandlerFunc(handlers.GetUserHandler)))
+	mux.Handle("PATCH /api/users/{id}", middleware.RequireAuth(http.HandlerFunc(handlers.PatchUserHandler)))
+
 	mux.HandleFunc("GET /api/surveys", handlers.GetSurveysHandler)
+	mux.HandleFunc("GET /api/search", handlers.SearchSurveysHandler)
 	mux.HandleFunc("GET /api/surveys/{id}", handlers.GetSurveyHandler)
-	mux.HandleFunc("POST /api/surveys", handlers.CreateSurveyHandler)
+	mux.Handle("POST /api/surveys", middleware.RequireAuth(http.HandlerFunc(handlers.CreateSurveyHandler)))
 	mux.HandleFunc("GET /api/config", handlers.GetConfigHandler)
-	mux.HandleFunc("POST /api/surveys/{id}/answers", handlers.SubmitAnswersHandler)
-	mux.HandleFunc("POST /api/media", handlers.UploadMediaHandler)
+	mux.Handle("POST /api/surveys/{id}/answers", middleware.RequireAuth(http.HandlerFunc(handlers.SubmitAnswersHandler)))
+	mux.Handle("POST /api/media", middleware.RequireAuth(http.HandlerFunc(handlers.UploadMediaHandler)))
 	mux.HandleFunc("GET /api/media/{id}", handlers.GetMediaHandler)
+	mux.Handle("POST /api/user-media", middleware.RequireAuth(http.HandlerFunc(handlers.UploadUserAvatarHandler)))
+	mux.HandleFunc("GET /api/user-media/{id}", handlers.GetUserMediaHandler)
 
-	// API Health Check Route
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status": "ok", "message": "Optiyoo Backend is running smoothly!"}`))
 	})
 
-	chain := middleware.RequestLog(corsMiddleware(mux))
+	apiChain := middleware.SecurityHeaders(corsMiddleware(mux))
+	chain := middleware.RequestLog(apiChain)
 	log.Println("[optiyoo] API http://127.0.0.1:8080 (istek logları [http], medya [media])")
 	if err := http.ListenAndServe(":8080", chain); err != nil {
 		log.Fatalf("[optiyoo] sunucu: %v", err)

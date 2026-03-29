@@ -84,6 +84,24 @@ func InitDB() {
 		log.Fatalf("Tablolar oluşturulamadı: %v", err)
 	}
 
+	// Arama: pg_trgm + GIN — ILIKE '%...%' için Postgres’in önerilen yolu (kısmi metin eşlemesi).
+	if _, extErr := DB.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`); extErr != nil {
+		log.Printf("[db] pg_trgm uzantısı yok veya izin yok (arama yine çalışır, indeksler atlanır): %v\n", extErr)
+	} else {
+		idxStmts := []string{
+			`CREATE INDEX IF NOT EXISTS users_name_trgm_idx ON users USING gin (name gin_trgm_ops)`,
+			`CREATE INDEX IF NOT EXISTS users_username_trgm_idx ON users USING gin (username gin_trgm_ops)`,
+			`CREATE INDEX IF NOT EXISTS questions_text_trgm_idx ON questions USING gin (text gin_trgm_ops)`,
+			`CREATE INDEX IF NOT EXISTS options_text_trgm_idx ON options USING gin (text gin_trgm_ops)`,
+			`CREATE INDEX IF NOT EXISTS answers_value_trgm_idx ON answers USING gin (value gin_trgm_ops)`,
+		}
+		for _, stmt := range idxStmts {
+			if _, e := DB.Exec(stmt); e != nil {
+				log.Printf("[db] trigram indeks: %v\n", e)
+			}
+		}
+	}
+
 	// Backward-compatible user feature flag migration.
 	_, err = DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS can_create_multi_question_surveys BOOLEAN NOT NULL DEFAULT FALSE;`)
 	if err != nil {
@@ -118,6 +136,25 @@ func InitDB() {
 	_, err = DB.Exec(`ALTER TABLE users DROP COLUMN IF EXISTS points;`)
 	if err != nil {
 		log.Fatalf("users.points kaldırılamadı: %v", err)
+	}
+
+	_, err = DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_color VARCHAR(7);`)
+	if err != nil {
+		log.Fatalf("users.avatar_color eklenemedi: %v", err)
+	}
+
+	_, err = DB.Exec(`
+	CREATE TABLE IF NOT EXISTS user_media (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL UNIQUE,
+		content_type TEXT NOT NULL,
+		storage_key TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS user_media_user_id_idx ON user_media (user_id);
+	`)
+	if err != nil {
+		log.Fatalf("user_media tablosu oluşturulamadı: %v", err)
 	}
 
 	// Seed Dummy Survey for MVP Evaluation

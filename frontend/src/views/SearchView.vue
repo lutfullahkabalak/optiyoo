@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { defineAsyncComponent, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const CreateSurveyModal = defineAsyncComponent(() => import('../components/CreateSurveyModal.vue'))
@@ -12,6 +12,7 @@ import { surveyFeedApiBase, useSurveyFeed } from '../composables/useSurveyFeed'
 
 const API_BASE = surveyFeedApiBase
 
+const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -21,11 +22,14 @@ const showCreateModal = ref(false)
 
 const feed = useSurveyFeed({
   onConflictReload: async (apply) => {
+    const q = String(route.query.q || '').trim()
+    if (!q) return
     const uid = authStore.user?.id
-    const res = await fetch(
-      `${surveyFeedApiBase}/api/surveys${uid ? `?user_id=${encodeURIComponent(uid)}` : ''}`,
-      { headers: uid ? authStore.authHeadersGet() : {} }
-    )
+    const params = new URLSearchParams({ q })
+    if (uid) params.set('user_id', uid)
+    const res = await fetch(`${surveyFeedApiBase}/api/search?${params.toString()}`, {
+      headers: uid ? authStore.authHeadersGet() : {}
+    })
     if (res.ok) apply(await res.json())
   }
 })
@@ -59,14 +63,20 @@ const {
   creatorAvatarLetter
 } = feed
 
-const fetchSurveys = async (opts?: { silent?: boolean }) => {
+const fetchSearchResults = async (opts?: { silent?: boolean }) => {
+  const q = String(route.query.q || '').trim()
+  if (!q) {
+    router.replace('/')
+    return
+  }
   if (!opts?.silent) isLoading.value = true
   try {
     const uid = authStore.user?.id
-    const res = await fetch(
-      `${surveyFeedApiBase}/api/surveys${uid ? `?user_id=${encodeURIComponent(uid)}` : ''}`,
-      { headers: uid ? authStore.authHeadersGet() : {} }
-    )
+    const params = new URLSearchParams({ q })
+    if (uid) params.set('user_id', uid)
+    const res = await fetch(`${surveyFeedApiBase}/api/search?${params.toString()}`, {
+      headers: uid ? authStore.authHeadersGet() : {}
+    })
     if (res.ok) {
       applySurveyListPayload(await res.json())
     }
@@ -77,28 +87,40 @@ const fetchSurveys = async (opts?: { silent?: boolean }) => {
   }
 }
 
-const goToSearchPage = () => {
+watch(
+  () => route.fullPath,
+  () => {
+    if (!authStore.isAuthenticated) {
+      router.push('/auth')
+      return
+    }
+    if (route.path !== '/search') return
+    const raw = route.query.q
+    searchQ.value = raw != null && raw !== '' ? String(raw) : ''
+    const q = searchQ.value.trim()
+    if (!q) {
+      router.replace('/')
+      return
+    }
+    fetchSearchResults()
+  },
+  { immediate: true }
+)
+
+const submitSearch = () => {
   const q = searchQ.value.trim()
   if (!q) return
   router.push({ path: '/search', query: { q } })
 }
 
-onMounted(async () => {
-  if (!authStore.isAuthenticated) {
-    router.push('/auth')
-    return
-  }
-  await fetchSurveys()
-})
-
-const handleSurveyCreated = async () => {
-  showCreateModal.value = false
-  await fetchSurveys()
-}
-
 const handleLogout = () => {
   authStore.logout()
   router.push('/auth')
+}
+
+const handleSurveyCreated = async () => {
+  showCreateModal.value = false
+  await fetchSearchResults({ silent: true })
 }
 </script>
 
@@ -115,13 +137,6 @@ const handleLogout = () => {
             </svg>
             <span>Ana Sayfa</span>
           </router-link>
-
-          <button class="x-nav-item" @click="showCreateModal = true">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
-            </svg>
-            <span>Oluştur</span>
-          </button>
 
           <router-link to="/settings" class="x-nav-item" title="Profil ayarları">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -144,8 +159,8 @@ const handleLogout = () => {
       <div class="x-feed-header">
         <div class="x-feed-header-bar">
           <router-link to="/" class="x-feed-header-brand">optiyoo</router-link>
-          <h2 class="x-feed-header-title">Ana Sayfa</h2>
-          <form class="x-header-search-form" @submit.prevent="goToSearchPage">
+          <h2 class="x-feed-header-title">Arama</h2>
+          <form class="x-header-search-form" @submit.prevent="submitSearch">
             <label class="x-search-field">
               <span class="x-search-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -171,8 +186,8 @@ const handleLogout = () => {
         </div>
       </div>
 
-      <div v-if="isLoading" class="x-state-msg">Akış yükleniyor...</div>
-      <div v-else-if="surveys.length === 0" class="x-state-msg">Şu an aktif bir oylama bulunmuyor.</div>
+      <div v-if="isLoading" class="x-state-msg">Sonuçlar yükleniyor...</div>
+      <div v-else-if="surveys.length === 0" class="x-state-msg">Aramanızla eşleşen anket yok.</div>
 
       <article v-for="s in surveys" :key="s.id" class="x-post" @click="closeSurveyMenu">
         <div class="x-post-body">
@@ -272,13 +287,9 @@ const handleLogout = () => {
       </router-link>
 
       <div class="x-stats-card">
-        <div class="x-stats-title">Özet</div>
+        <div class="x-stats-title">Arama özeti</div>
         <div class="x-stat-row">
-          <span class="x-stat-label">Cevaplanmış</span>
-          <span class="x-stat-value">{{ completedSurveys.size }}</span>
-        </div>
-        <div class="x-stat-row">
-          <span class="x-stat-label">Toplam Anket</span>
+          <span class="x-stat-label">Bulunan</span>
           <span class="x-stat-value">{{ surveys.length }}</span>
         </div>
       </div>

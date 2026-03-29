@@ -15,7 +15,10 @@ This file acts as the ultimate reference point for AI Agents to understand the O
 
 ## 2. Directory Structure (Monorepo)
 - `/backend/`: Contains the Go application.
-  - `main.go`: Route registration, CORS middleware, port `:8080`.
+  - `main.go`: Route registration, CORS (`OPTYOO_CORS_ORIGIN` virgülle çoklu köken; varsayılan `http://localhost:5173`; `OPTYOO_JWT_SECRET` yokken `https://*.trycloudflare.com` kökenleri de izinli), güvenlik başlıkları, JWT korumalı mutasyonlar, port `:8080`.
+  - `middleware/auth.go`: `Authorization: Bearer` JWT (HS256, `OPTYOO_JWT_SECRET`; geliştirmede yerleşik zayıf varsayılan), `RequireAuth`, `ParseBearerUserID`.
+  - `middleware/security.go`: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`.
+  - `handlers/password.go`: bcrypt ile şifre hash; eski düz metin satırları ilk başarılı girişte hash’e çevrilir.
   - `db/db.go`: PostgreSQL connection, schema DDL, optional inline seed rows.
   - `handlers/`: HTTP logic — `auth.go`, `config.go`, `survey.go`, `media.go` (multipart upload + binary GET).
   - `storage/storage.go`: `BlobStore` interface + `DiskStore` (files under `config.UploadDir()` / env `OPTYOO_UPLOAD_DIR`, default `data/uploads/`); swap implementation later for S3-compatible storage using the same logical `storage_key`.
@@ -23,6 +26,7 @@ This file acts as the ultimate reference point for AI Agents to understand the O
   - `models/models.go`: JSON/DB entity structs (`User`, `Survey`, `Question`, `Option`, `Answer`). `Question` / `Option` expose optional `image_url` in JSON when a row exists in `survey_media`.
   - `config/config.go`: `AllowOpenEndedQuestions`, `UploadDir()` / `OPTYOO_UPLOAD_DIR`, theme constants (`ThemeRoot`, `ThemeDark`, `ThemeWada1`–`3`), and `AppConfig` exposed as JSON via `/api/config`.
 - `/frontend/`: Vue app.
+  - `src/router/index.ts`: Tüm route view bileşenleri dinamik `import()` ile yüklenir. Anket kartlarında `SurveyUserHeader` / `SurveyQuestionBlock` görselleri `img loading="lazy"` kullanır; `CreateSurveyModal` ve `AvatarCropModal` sırasıyla `DashboardView` / `ProfileSettingsView` içinde `defineAsyncComponent` ile ilk açılışta parça yüklenir.
   - `src/stores/auth.ts`: Session user in `localStorage` key `optiyoo_user`.
   - `src/views/DashboardView.vue`: Main poll feed; embeds `CreateSurveyModal`, uses `SurveyCard`-style patterns (poll list, instant vote).
   - `src/components/CreateSurveyModal.vue`: Poll creation (replaces the removed dedicated create page); after `POST /api/surveys` uploads optional per-question / per-option images via `POST /api/media` (multipart), matching array order to returned IDs.
@@ -30,7 +34,7 @@ This file acts as the ultimate reference point for AI Agents to understand the O
   - `src/components/SurveyCard.vue`: Reusable poll card UI.
   - `src/views/SurveyView.vue`: Deep link for a single survey (`/s/:id`).
   - `src/views/HomeView.vue`: Auth entry (route `/auth`).
-  - `src/views/ProfileSettingsView.vue`: Profil ayarları (`/settings`); `GET` + `PATCH /api/users/{id}`.
+  - `src/views/ProfileSettingsView.vue`: Profil ayarları (`/settings`); `GET` + `PATCH /api/users/{id}`; profil resmi `POST /api/user-media` + `AvatarCropModal.vue` (daire kırpma), `avatar_color` paleti.
 - `/scripts/seed_test_data.sh`: Optional curl-based bulk seed against a running API (not required for core flow).
 
 ## 3. Frontend Routes (`frontend/src/router/index.ts`)
@@ -38,20 +42,26 @@ This file acts as the ultimate reference point for AI Agents to understand the O
 |------|------|------|
 | `/auth` | `HomeView` | Login / register |
 | `/` | `DashboardView` | Feed + create modal |
+| `/search` | `SearchView` | `?q=` ile API araması; ana sayfadaki arama buraya yönlendirir |
 | `/settings` | `ProfileSettingsView` | Profil: kullanıcı adı, e-posta, şifre (kenar çubuğu Profil veya sağ panel kullanıcı kartı) |
 | `/s/:id` | `SurveyView` | Shareable survey page |
 
 ## 4. API Surface (high level)
-- `POST /api/register`, `POST /api/login` — user JSON; passwords cleared on register response.
-- `GET /api/users/{id}?user_id={id}` — oturumdaki kullanıcıyı doğrular (`user_id` path ile aynı olmalı); şifresiz kullanıcı JSON.
-- `PATCH /api/users/{id}` — gövde: `user_id` (path ile aynı), `current_password` (zorunlu), isteğe bağlı `name` (görünen ad, en fazla 255 karakter), `username`, `email`, `new_password` (en az 6 karakter). En az bir alan gerçekten değişmeli; mevcut şifre yanlışsa **401**, çakışma **409** metinleri; yanıtta güncel kullanıcı (şifresiz).
+- **Kimlik doğrulama:** `POST /api/register` ve `POST /api/login` yanıtında kullanıcı alanları + `token` (JWT). Korunan uçlarda `Authorization: Bearer <token>` zorunlu. Şifreler bcrypt ile saklanır; DB’de düz metin kalan eski kayıtlar ilk doğru girişte otomatik hash’lenir.
+- `POST /api/register` — kayıt; şifre yanıtta dönmez. Kayıtta şifre en az 6 karakter.
+- `POST /api/login` — e-posta + şifre; başarıda `token` + kullanıcı JSON.
+- `GET /api/users/{id}` — **Bearer gerekli**; path `id` JWT `sub` ile aynı olmalı; şifresiz kullanıcı JSON (`avatar_url`, `avatar_color` dahil).
+- `PATCH /api/users/{id}` — **Bearer gerekli**; path `id` JWT ile aynı olmalı. Gövde: isteğe bağlı `name` (≤255), `username`, `email`, `avatar_color` (`#RRGGBB` veya boş string = sıfırla), `remove_avatar` (bool, profil fotoğrafını kaldırır), `new_password` (≥6; yalnızca bu alan doluysa `current_password` zorunlu ve bcrypt / geçiş dönemi düz metin ile doğrulanır). Yeni şifre her zaman bcrypt yazılır.
 - `GET /api/config` — full `config.AppConfig` (open-ended flag + theme fields).
-- `GET /api/surveys` — **optional** query `user_id`: when set, each survey may include `user_answers` (`question_id` → seçilen `option_id` map) if that user already voted; `user_answer` remains the first question’s value for backward compatibility (used to sync UI + completed set). Her kayıtta `creator_name` ve `creator_username` (oluşturan `users` join) döner.
-- `GET /api/surveys/{id}` — same `user_id` query semantics; `creator_username` dahil.
-- `POST /api/surveys` — create survey (body: `Survey` with nested question/options); creator must send `creator_id` matching logged-in user.
-- `POST /api/surveys/{id}/answers` — body `{ user_id, answers: [...] }`; aynı `survey_id` + `user_id` + `question_id` için ikinci kayıt **403** (handler, insert öncesi). İstekte tek soru veya birden fazla soru olabilir; tüm soruların tek seferde dolması zorunlu değildir.
-- `POST /api/media` — `multipart/form-data`: `user_id` (anket `creator_id` ile eşleşmeli), `survey_id`, `kind` (`question` | `option`), `ref_id` (soru veya seçenek id), `file` (JPEG/PNG/WebP/GIF, max 5MB). Sunucu kabul sonrası görseli `imagemin` ile sıkıştırır/yeniden boyutlandırır (API sözleşmesi değişmez). Yanıt JSON: `id`, `image_url` path `/api/media/{id}`. Aynı `(survey_id, kind, ref_id)` için tekrar yükleme eski dosyayı değiştirir.
+- `GET /api/surveys` — **optional** query `user_id`: dolu ise aynı kullanıcıya ait `Authorization: Bearer` zorunlu (`sub` = `user_id`); aksi **403**. `user_id` boşsa herkese açık liste. `user_id` set iken `user_answers` / `user_answer` senkronu; her kayıtta `creator_name`, `creator_username`, isteğe bağlı `creator_avatar_url`, `creator_avatar_color`.
+- `GET /api/search` — query `q` (zorunlu, boşsa `[]`); aktif anketlerde oluşturucu `username` / `name`, soru metni, seçenek metni ve `answers.value` (oy / metin cevabı) üzerinde büyük/küçük harf duyarsız alt dize araması. İsteğe bağlı `user_id` + Bearer kuralları `GET /api/surveys` ile aynı. Yanıt gövdesi anket listesi ile aynı şekilde tam iç içe anket dizisi. Performans: Postgres `pg_trgm` + GIN indeksleri (`db.go` başlangıcında, uzantı yoksa log ile atlanır).
+- `GET /api/surveys/{id}` — yalnızca `is_active = TRUE` anketler (**pasif veya yok → 404**). `user_id` query varsa Bearer ile `sub` eşleşmesi zorunlu (yukarıdaki gibi).
+- `POST /api/surveys` — **Bearer gerekli**; oluşturan kimlik yalnızca JWT’den alınır (gövdedeki `creator_id` yok sayılır). Body: `Survey` + iç içe soru/seçenekler.
+- `POST /api/surveys/{id}/answers` — **Bearer gerekli**; oy veren kullanıcı JWT `sub` (gövdede `user_id` yok). Body: `{ answers: [...] }`. `single_choice` / `choice` için `value` ilgili sorunun geçerli `options.id` olmalı; `text` için uzunluk sınırı 4000. Pasif anket **410**. Aynı `survey_id` + `user_id` + `question_id` için ikinci kayıt **403**.
+- `POST /api/media` — **Bearer gerekli**; yükleyen = JWT `sub` ve anketin `creator_id` ile eşleşmeli. `multipart/form-data`: `survey_id`, `kind` (`question` | `option`), `ref_id`, `file` (JPEG/PNG/WebP/GIF, max 5MB). Yanıt: `id`, `image_url` `/api/media/{id}`.
+- `POST /api/user-media` — **Bearer gerekli**; yükleyen = JWT `sub` (kendi profil resmi). `multipart/form-data`: `file` (JPEG/PNG/WebP/GIF, max 5MB), isteğe bağlı `avatar_color` (`#RRGGBB`). Yanıt: `id`, `image_url` `/api/user-media/{id}`; kullanıcı başına tek kayıt (üstüne yazar).
 - `GET /api/media/{id}` — yalnızca `surveys.is_active = TRUE` olan anketlere bağlı medya için dosya akışı; aksi 404.
+- `GET /api/user-media/{id}` — profil resmi dosyası; herkese açık okuma (akış).
 - `GET /api/health` — health JSON.
 
 ## 5. Core Business & Architecture Rules
@@ -66,11 +76,14 @@ This file acts as the ultimate reference point for AI Agents to understand the O
 - **Rewards (+5 OPT):** Documented in product docs (e.g. README / `.cursorrules`) as a goal. **Current schema and `SubmitAnswersHandler` do not persist a points balance** — do not assume a `points` column or automatic rewards unless code and migrations add them.
 
 ## 6. localStorage (frontend)
-- `optiyoo_user` — JSON user `{ id, name, email, username, ... }` (Pinia `auth` store).
+- `optiyoo_user` — JSON user `{ id, name, email, username, avatar_url?, avatar_color?, ... }` (Pinia `auth` store).
+- `optiyoo_token` — JWT access token; korunan API isteklerinde `Authorization` başlığında kullanılır. Kullanıcı kaydı token olmadan kalırsa (eski oturum) istemci tutarsız sayılır ve `optiyoo_user` temizlenebilir.
 - `completed_polls_<userId>` — JSON array of survey IDs the client treats as **tamamen** cevaplanmış; kısmi çok sorulu anketler listede olmayabilir, kilit durumu `user_answers` ile senkronlanır.
 
 ## 7. Database Schema (from `db/db.go`)
-- `users(id, email UNIQUE, password, name, username UNIQUE, can_create_multi_question_surveys, created_at, updated_at)`
+- İsteğe bağlı: `CREATE EXTENSION pg_trgm` ve GIN trigram indeksleri — `users.name`, `users.username`, `questions.text`, `options.text`, `answers.value` (arama sorguları için).
+- `users(id, email UNIQUE, password, name, username UNIQUE, can_create_multi_question_surveys, avatar_color VARCHAR(7) NULL, created_at, updated_at)`
+- `user_media(id, user_id UNIQUE, content_type, storage_key, created_at)` — kullanıcı profil resmi (disk: `users/{user_id}/{id}{ext}`).
 - `surveys(id, creator_id, is_active, created_at)`
 - `questions(id, survey_id, type, text, q_order)`
 - `options(id, question_id, text)`

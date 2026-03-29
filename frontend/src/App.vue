@@ -8,9 +8,11 @@ interface AppConfig {
   themes?: string[]
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+
 onMounted(async () => {
   try {
-    const res = await fetch('http://localhost:8080/api/config')
+    const res = await fetch(`${API_BASE}/api/config`)
     if (res.ok) {
       const config = await res.json() as AppConfig
       const themeClass = config.active_theme || config.default_theme

@@ -2,6 +2,8 @@
 defineProps<{
   avatarColor: string
   avatarText: string
+  /** Tam URL; doluysa daire içinde fotoğraf */
+  avatarImageUrl?: string
   displayName: string
   handle: string
   timeAgo: string
@@ -11,8 +13,20 @@ defineProps<{
 
 <template>
   <div class="survey-user-header">
-    <div class="survey-avatar" :style="{ background: avatarColor }">
-      {{ avatarText }}
+    <div
+      class="survey-avatar"
+      :class="{ 'survey-avatar--photo': !!avatarImageUrl }"
+      :style="avatarImageUrl ? undefined : { background: avatarColor }"
+    >
+      <img
+        v-if="avatarImageUrl"
+        class="survey-avatar-img"
+        :src="avatarImageUrl"
+        alt=""
+        loading="lazy"
+        decoding="async"
+      />
+      <template v-else>{{ avatarText }}</template>
     </div>
     <div class="survey-meta">
       <div class="survey-meta-row">
@@ -42,6 +56,16 @@ defineProps<{
   font-size: 16px;
   color: #fff;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.survey-avatar--photo {
+  background: var(--border-color, #e5e7eb);
+}
+.survey-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .survey-meta {
   flex: 1;

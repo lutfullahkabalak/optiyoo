@@ -138,12 +138,15 @@ async function uploadPendingMedia(created: any): Promise<{ failed: number; first
     }
     if (localQ.imageFile) {
       const fd = new FormData()
-      fd.append('user_id', uid)
       fd.append('survey_id', created.id)
       fd.append('kind', 'question')
       fd.append('ref_id', String(remoteQ.id))
       fd.append('file', localQ.imageFile)
-      const r = await fetch(`${API_BASE}/api/media`, { method: 'POST', body: fd })
+      const r = await fetch(`${API_BASE}/api/media`, {
+        method: 'POST',
+        headers: authStore.authHeadersMultipart(),
+        body: fd
+      })
       if (!r.ok) {
         failed++
         const t = await r.text()
@@ -158,12 +161,15 @@ async function uploadPendingMedia(created: any): Promise<{ failed: number; first
       const remoteO = rOpts[oi]
       if (!remoteO?.id || !localO?.imageFile) continue
       const fd = new FormData()
-      fd.append('user_id', uid)
       fd.append('survey_id', created.id)
       fd.append('kind', 'option')
       fd.append('ref_id', String(remoteO.id))
       fd.append('file', localO.imageFile)
-      const r = await fetch(`${API_BASE}/api/media`, { method: 'POST', body: fd })
+      const r = await fetch(`${API_BASE}/api/media`, {
+        method: 'POST',
+        headers: authStore.authHeadersMultipart(),
+        body: fd
+      })
       if (!r.ok) {
         failed++
         const t = await r.text()
@@ -198,7 +204,7 @@ const submitSurvey = async () => {
   try {
     const res = await fetch(`${API_BASE}/api/surveys`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authStore.authHeadersJson(),
       body: JSON.stringify(surveyPayloadJSON())
     })
 
