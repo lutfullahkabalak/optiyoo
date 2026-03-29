@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const AvatarCropModal = defineAsyncComponent(() => import('../components/AvatarCropModal.vue'))
@@ -18,11 +18,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const loadError = ref('')
-const displayNameMsg = ref('')
-const usernameMsg = ref('')
-const emailMsg = ref('')
-const passwordMsg = ref('')
-const avatarMsg = ref('')
+const saveMsg = ref('')
 
 const newDisplayName = ref('')
 
@@ -34,16 +30,23 @@ const passwordCurrentPw = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
 
-const busyDisplayName = ref(false)
-const busyUser = ref(false)
-const busyEmail = ref(false)
-const busyPassword = ref(false)
-const busyAvatar = ref(false)
+const saving = ref(false)
 
 const selectedAvatarColor = ref('#6366f1')
 const cropOpen = ref(false)
 const cropFile = ref<File | null>(null)
 const avatarFileInput = ref<HTMLInputElement | null>(null)
+const pendingAvatarBlob = ref<Blob | null>(null)
+const pendingAvatarObjectUrl = ref<string | null>(null)
+const pendingRemoveAvatar = ref(false)
+const clearAvatarColorPending = ref(false)
+
+const revokePendingAvatarPreview = () => {
+  if (pendingAvatarObjectUrl.value) {
+    URL.revokeObjectURL(pendingAvatarObjectUrl.value)
+    pendingAvatarObjectUrl.value = null
+  }
+}
 
 const syncFormDefaults = () => {
   const u = authStore.user
@@ -56,7 +59,37 @@ const syncFormDefaults = () => {
   } else {
     selectedAvatarColor.value = hashAvatarColor(u.id)
   }
+  pendingAvatarBlob.value = null
+  revokePendingAvatarPreview()
+  pendingRemoveAvatar.value = false
+  clearAvatarColorPending.value = false
 }
+
+const effectiveAvatarColorLower = (u: NonNullable<typeof authStore.user>) => {
+  const c = u.avatar_color?.trim()
+  if (c && /^#[0-9A-Fa-f]{6}$/i.test(c)) return c.toLowerCase()
+  return hashAvatarColor(u.id).toLowerCase()
+}
+
+const hasPendingChanges = computed(() => {
+  const u = authStore.user
+  if (!u) return false
+  if (newDisplayName.value.trim() !== (u.name || '').trim()) return true
+  if (newUsername.value.trim() !== (u.username || '').trim()) return true
+  if (newEmail.value.trim() !== (u.email || '').trim()) return true
+  if (pendingAvatarBlob.value) return true
+  if (pendingRemoveAvatar.value) return true
+  if (clearAvatarColorPending.value) return true
+  const sel = selectedAvatarColor.value.trim().toLowerCase()
+  if (sel && /^#[0-9A-Fa-f]{6}$/i.test(sel) && sel !== effectiveAvatarColorLower(u)) return true
+  const pwdTouched =
+    passwordCurrentPw.value.length > 0 || newPassword.value.length > 0 || confirmPassword.value.length > 0
+  return pwdTouched
+})
+
+onUnmounted(() => {
+  revokePendingAvatarPreview()
+})
 
 const refreshProfile = async () => {
   const uid = authStore.user?.id
@@ -94,86 +127,124 @@ onMounted(async () => {
   }
 })
 
-const patchUser = async (
-  body: Record<string, unknown>,
-  setBusy: (v: boolean) => void,
-  setMsg: (v: string) => void
-) => {
-  const uid = authStore.user?.id
-  if (!uid) return
-  setMsg('')
-  setBusy(true)
+const onAvatarColorPick = () => {
+  clearAvatarColorPending.value = false
+}
+
+const selectSwatchColor = (col: string) => {
+  selectedAvatarColor.value = col
+  onAvatarColorPick()
+}
+
+const saveAll = async () => {
+  saveMsg.value = ''
+  const u = authStore.user
+  if (!u?.id) return
+
+  const n = newDisplayName.value.trim()
+  const un = newUsername.value.trim()
+  const em = newEmail.value.trim()
+  if (!n) {
+    saveMsg.value = 'Görünen ad gerekli.'
+    return
+  }
+  if (!un) {
+    saveMsg.value = 'Kullanıcı adı gerekli.'
+    return
+  }
+  if (!em) {
+    saveMsg.value = 'E-posta gerekli.'
+    return
+  }
+
+  const pwdTouched =
+    passwordCurrentPw.value.length > 0 || newPassword.value.length > 0 || confirmPassword.value.length > 0
+  if (pwdTouched) {
+    if (!passwordCurrentPw.value) {
+      saveMsg.value = 'Şifre değiştirmek için mevcut şifrenizi girin.'
+      return
+    }
+    if (newPassword.value.length < 6) {
+      saveMsg.value = 'Yeni şifre en az 6 karakter olmalı.'
+      return
+    }
+    if (newPassword.value !== confirmPassword.value) {
+      saveMsg.value = 'Yeni şifreler eşleşmiyor.'
+      return
+    }
+  }
+
+  if (!hasPendingChanges.value) {
+    saveMsg.value = 'Kaydedilecek değişiklik yok.'
+    return
+  }
+
+  saving.value = true
   try {
-    const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(uid)}`, {
+    if (pendingAvatarBlob.value) {
+      const fd = new FormData()
+      fd.append('file', pendingAvatarBlob.value, 'avatar.jpg')
+      const c = selectedAvatarColor.value.trim()
+      if (c && /^#[0-9A-Fa-f]{6}$/i.test(c)) {
+        fd.append('avatar_color', c)
+      }
+      const res = await fetch(`${API_BASE}/api/user-media`, {
+        method: 'POST',
+        headers: authStore.authHeadersMultipart(),
+        body: fd
+      })
+      const text = await res.text()
+      if (!res.ok) {
+        saveMsg.value = text || 'Profil resmi yüklenemedi.'
+        return
+      }
+    }
+
+    const body: Record<string, unknown> = {
+      name: n,
+      username: un,
+      email: em
+    }
+    if (pwdTouched) {
+      body.current_password = passwordCurrentPw.value
+      body.new_password = newPassword.value
+    }
+    if (clearAvatarColorPending.value) {
+      body.avatar_color = ''
+    } else {
+      const c = selectedAvatarColor.value.trim()
+      if (c && /^#[0-9A-Fa-f]{6}$/i.test(c) && c.toLowerCase() !== effectiveAvatarColorLower(u)) {
+        body.avatar_color = c
+      }
+    }
+    if (pendingRemoveAvatar.value) {
+      body.remove_avatar = true
+    }
+
+    const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(u.id)}`, {
       method: 'PATCH',
       headers: authStore.authHeadersJson(),
       body: JSON.stringify(body)
     })
     const text = await res.text()
     if (!res.ok) {
-      setMsg(text || 'İşlem başarısız.')
+      saveMsg.value = text || 'Kayıt başarısız.'
       return
     }
     const data = JSON.parse(text)
     authStore.setUser(data)
+    await refreshProfile()
     syncFormDefaults()
     passwordCurrentPw.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
-    setMsg('Kaydedildi.')
+    saveMsg.value = 'Değişiklikler kaydedildi.'
   } catch (e) {
-    setMsg('Bağlantı hatası.')
+    saveMsg.value = 'Bağlantı hatası.'
     console.error(e)
   } finally {
-    setBusy(false)
+    saving.value = false
   }
-}
-
-const saveDisplayName = () => {
-  const n = newDisplayName.value.trim()
-  if (!n) {
-    displayNameMsg.value = 'Görünen ad gerekli.'
-    return
-  }
-  patchUser({ name: n }, (v) => (busyDisplayName.value = v), (m) => (displayNameMsg.value = m))
-}
-
-const saveUsername = () => {
-  const u = newUsername.value.trim()
-  if (!u) {
-    usernameMsg.value = 'Kullanıcı adı gerekli.'
-    return
-  }
-  patchUser({ username: u }, (v) => (busyUser.value = v), (m) => (usernameMsg.value = m))
-}
-
-const saveEmail = () => {
-  const e = newEmail.value.trim()
-  if (!e) {
-    emailMsg.value = 'E-posta gerekli.'
-    return
-  }
-  patchUser({ email: e }, (v) => (busyEmail.value = v), (m) => (emailMsg.value = m))
-}
-
-const savePassword = () => {
-  if (!passwordCurrentPw.value) {
-    passwordMsg.value = 'Mevcut şifrenizi girin.'
-    return
-  }
-  if (newPassword.value.length < 6) {
-    passwordMsg.value = 'Yeni şifre en az 6 karakter olmalı.'
-    return
-  }
-  if (newPassword.value !== confirmPassword.value) {
-    passwordMsg.value = 'Yeni şifreler eşleşmiyor.'
-    return
-  }
-  patchUser(
-    { current_password: passwordCurrentPw.value, new_password: newPassword.value },
-    (v) => (busyPassword.value = v),
-    (m) => (passwordMsg.value = m)
-  )
 }
 
 const openAvatarPicker = () => {
@@ -189,56 +260,50 @@ const onAvatarFileChange = (e: Event) => {
   cropOpen.value = true
 }
 
-const onAvatarCropped = async (blob: Blob) => {
-  avatarMsg.value = ''
-  busyAvatar.value = true
-  try {
-    const fd = new FormData()
-    fd.append('file', blob, 'avatar.jpg')
-    const c = selectedAvatarColor.value.trim()
-    if (c && /^#[0-9A-Fa-f]{6}$/i.test(c)) {
-      fd.append('avatar_color', c)
-    }
-    const res = await fetch(`${API_BASE}/api/user-media`, {
-      method: 'POST',
-      headers: authStore.authHeadersMultipart(),
-      body: fd
-    })
-    const text = await res.text()
-    if (!res.ok) {
-      avatarMsg.value = text || 'Yükleme başarısız.'
-      return
-    }
-    await refreshProfile()
-    avatarMsg.value = 'Profil resmi güncellendi.'
-  } catch (e) {
-    avatarMsg.value = 'Bağlantı hatası.'
-    console.error(e)
-  } finally {
-    busyAvatar.value = false
-  }
-}
-
-const saveAvatarColor = () => {
-  const c = selectedAvatarColor.value.trim()
-  if (c && !/^#[0-9A-Fa-f]{6}$/i.test(c)) {
-    avatarMsg.value = 'Geçerli bir renk seçin (#RRGGBB).'
-    return
-  }
-  patchUser({ avatar_color: c }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
+const onAvatarCropped = (blob: Blob) => {
+  saveMsg.value = ''
+  revokePendingAvatarPreview()
+  pendingAvatarBlob.value = blob
+  pendingAvatarObjectUrl.value = URL.createObjectURL(blob)
+  pendingRemoveAvatar.value = false
 }
 
 const clearStoredAvatarColor = () => {
-  patchUser({ avatar_color: '' }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
+  const u = authStore.user
+  if (!u) return
+  saveMsg.value = ''
+  clearAvatarColorPending.value = true
+  selectedAvatarColor.value = hashAvatarColor(u.id)
 }
 
 const removeAvatarPhoto = () => {
-  if (!authStore.user?.avatar_url) {
-    avatarMsg.value = 'Yüklü bir fotoğraf yok.'
+  const u = authStore.user
+  if (pendingAvatarBlob.value) {
+    saveMsg.value = ''
+    revokePendingAvatarPreview()
+    pendingAvatarBlob.value = null
+    pendingRemoveAvatar.value = false
     return
   }
-  patchUser({ remove_avatar: true }, (v) => (busyAvatar.value = v), (m) => (avatarMsg.value = m))
+  if (!u?.avatar_url) {
+    saveMsg.value = 'Yüklü bir fotoğraf yok.'
+    return
+  }
+  saveMsg.value = ''
+  pendingRemoveAvatar.value = true
 }
+
+const showAvatarPhotoInPreview = computed(() => {
+  if (pendingRemoveAvatar.value) return false
+  if (pendingAvatarObjectUrl.value) return true
+  return !!authStore.user?.avatar_url
+})
+
+const avatarPreviewSrc = computed(() => {
+  if (pendingAvatarObjectUrl.value) return pendingAvatarObjectUrl.value
+  const url = authStore.user?.avatar_url
+  return url ? absoluteApiUrl(API_BASE, url) : ''
+})
 </script>
 
 <template>
@@ -260,19 +325,14 @@ const removeAvatarPhoto = () => {
       <div class="profile-head card">
         <div
           class="profile-avatar"
-          :class="{ 'profile-avatar--photo': !!authStore.user.avatar_url }"
+          :class="{ 'profile-avatar--photo': showAvatarPhotoInPreview }"
           :style="
-            authStore.user.avatar_url
+            showAvatarPhotoInPreview
               ? undefined
-              : { background: resolveAvatarBackground(authStore.user.avatar_color, authStore.user.id) }
+              : { background: resolveAvatarBackground(selectedAvatarColor, authStore.user.id) }
           "
         >
-          <img
-            v-if="authStore.user.avatar_url"
-            class="profile-avatar-img"
-            :src="absoluteApiUrl(API_BASE, authStore.user.avatar_url)"
-            alt=""
-          />
+          <img v-if="showAvatarPhotoInPreview" class="profile-avatar-img" :src="avatarPreviewSrc" alt="" />
           <template v-else>{{ usernameInitial(authStore.user.username) }}</template>
         </div>
         <div>
@@ -284,25 +344,21 @@ const removeAvatarPhoto = () => {
       <section class="card settings-section">
         <h2>Profil fotoğrafı ve renk</h2>
         <p class="hint">
-          Fotoğraf seçtiğinizde daire içinde kırpma penceresi açılır. Fotoğraf yoksa kullanıcı adınızın baş harfi
-          gösterilir. Arka plan rengini aşağıdan seçebilir veya kayıtlı rengi sıfırlayıp otomatik palete dönebilirsiniz.
+          Fotoğraf seçtiğinizde kırpma penceresi açılır; yükleme sayfanın altındaki "Değişiklikleri kaydet" ile
+          tamamlanır. Fotoğraf yoksa kullanıcı adınızın baş harfi gösterilir. Arka plan rengini seçebilir veya kayıtlı
+          rengi sıfırlayabilirsiniz.
         </p>
         <div class="avatar-preview-row">
           <div
             class="avatar-preview-circle"
-            :class="{ 'avatar-preview-circle--photo': !!authStore.user.avatar_url }"
+            :class="{ 'avatar-preview-circle--photo': showAvatarPhotoInPreview }"
             :style="
-              authStore.user.avatar_url
+              showAvatarPhotoInPreview
                 ? undefined
                 : { background: resolveAvatarBackground(selectedAvatarColor, authStore.user.id) }
             "
           >
-            <img
-              v-if="authStore.user.avatar_url"
-              class="avatar-preview-img"
-              :src="absoluteApiUrl(API_BASE, authStore.user.avatar_url)"
-              alt=""
-            />
+            <img v-if="showAvatarPhotoInPreview" class="avatar-preview-img" :src="avatarPreviewSrc" alt="" />
             <span v-else class="avatar-preview-letter">{{ usernameInitial(authStore.user.username) }}</span>
           </div>
           <div class="avatar-preview-actions">
@@ -313,14 +369,14 @@ const removeAvatarPhoto = () => {
               class="visually-hidden"
               @change="onAvatarFileChange"
             />
-            <button type="button" class="btn btn-primary" :disabled="busyAvatar" @click="openAvatarPicker">
-              {{ busyAvatar ? 'İşleniyor…' : 'Resim seç' }}
+            <button type="button" class="btn btn-primary" :disabled="saving" @click="openAvatarPicker">
+              Resim seç
             </button>
             <button
-              v-if="authStore.user.avatar_url"
+              v-if="authStore.user.avatar_url || pendingAvatarBlob"
               type="button"
               class="btn btn-outline"
-              :disabled="busyAvatar"
+              :disabled="saving"
               @click="removeAvatarPhoto"
             >
               Fotoğrafı kaldır
@@ -337,30 +393,23 @@ const removeAvatarPhoto = () => {
             :style="{ background: col }"
             :title="col"
             :aria-pressed="selectedAvatarColor.toLowerCase() === col.toLowerCase()"
-            @click="selectedAvatarColor = col"
+            @click="selectSwatchColor(col)"
           />
         </div>
         <div class="form-group">
           <label class="form-label">Özel renk</label>
-          <input v-model="selectedAvatarColor" type="color" class="form-control color-native" />
+          <input
+            v-model="selectedAvatarColor"
+            type="color"
+            class="form-control color-native"
+            @input="onAvatarColorPick"
+          />
         </div>
-        <div class="avatar-save-row">
-          <button type="button" class="btn btn-primary" :disabled="busyAvatar" @click="saveAvatarColor">
-            {{ busyAvatar ? 'Kaydediliyor…' : 'Rengi kaydet' }}
-          </button>
-          <button
-            v-if="authStore.user.avatar_color"
-            type="button"
-            class="btn btn-outline"
-            :disabled="busyAvatar"
-            @click="clearStoredAvatarColor"
-          >
+        <div v-if="authStore.user.avatar_color" class="avatar-extra-row">
+          <button type="button" class="btn btn-outline" :disabled="saving" @click="clearStoredAvatarColor">
             Kayıtlı rengi sıfırla
           </button>
         </div>
-        <p v-if="avatarMsg" class="msg" :class="{ ok: avatarMsg.includes('güncellendi') || avatarMsg === 'Kaydedildi.' }">
-          {{ avatarMsg }}
-        </p>
       </section>
 
       <section class="card settings-section">
@@ -370,10 +419,6 @@ const removeAvatarPhoto = () => {
           <label class="form-label">Görünen ad</label>
           <input v-model="newDisplayName" type="text" class="form-control" autocomplete="name" maxlength="255" />
         </div>
-        <p v-if="displayNameMsg" class="msg" :class="{ ok: displayNameMsg === 'Kaydedildi.' }">{{ displayNameMsg }}</p>
-        <button type="button" class="btn btn-primary" :disabled="busyDisplayName" @click="saveDisplayName">
-          {{ busyDisplayName ? 'Kaydediliyor…' : 'Görünen adı kaydet' }}
-        </button>
       </section>
 
       <section class="card settings-section">
@@ -383,10 +428,6 @@ const removeAvatarPhoto = () => {
           <label class="form-label">Yeni kullanıcı adı</label>
           <input v-model="newUsername" type="text" class="form-control" autocomplete="username" />
         </div>
-        <p v-if="usernameMsg" class="msg" :class="{ ok: usernameMsg === 'Kaydedildi.' }">{{ usernameMsg }}</p>
-        <button type="button" class="btn btn-primary" :disabled="busyUser" @click="saveUsername">
-          {{ busyUser ? 'Kaydediliyor…' : 'Kullanıcı adını kaydet' }}
-        </button>
       </section>
 
       <section class="card settings-section">
@@ -396,10 +437,6 @@ const removeAvatarPhoto = () => {
           <label class="form-label">Yeni e-posta</label>
           <input v-model="newEmail" type="email" class="form-control" autocomplete="email" />
         </div>
-        <p v-if="emailMsg" class="msg" :class="{ ok: emailMsg === 'Kaydedildi.' }">{{ emailMsg }}</p>
-        <button type="button" class="btn btn-primary" :disabled="busyEmail" @click="saveEmail">
-          {{ busyEmail ? 'Kaydediliyor…' : 'E-postayı kaydet' }}
-        </button>
       </section>
 
       <section class="card settings-section">
@@ -417,9 +454,28 @@ const removeAvatarPhoto = () => {
           <label class="form-label">Yeni şifre (tekrar)</label>
           <input v-model="confirmPassword" type="password" class="form-control" autocomplete="new-password" />
         </div>
-        <p v-if="passwordMsg" class="msg" :class="{ ok: passwordMsg === 'Kaydedildi.' }">{{ passwordMsg }}</p>
-        <button type="button" class="btn btn-primary" :disabled="busyPassword" @click="savePassword">
-          {{ busyPassword ? 'Kaydediliyor…' : 'Şifreyi güncelle' }}
+      </section>
+
+      <section class="card settings-section settings-save-section">
+        <p
+          v-if="saveMsg"
+          class="save-msg"
+          :class="{
+            'save-msg--err':
+              saveMsg !== 'Kaydedilecek değişiklik yok.' && saveMsg !== 'Değişiklikler kaydedildi.',
+            'save-msg--ok': saveMsg === 'Değişiklikler kaydedildi.',
+            'save-msg--muted': saveMsg === 'Kaydedilecek değişiklik yok.'
+          }"
+        >
+          {{ saveMsg }}
+        </p>
+        <button
+          type="button"
+          class="btn btn-primary btn-save-all"
+          :disabled="saving || !hasPendingChanges"
+          @click="saveAll"
+        >
+          {{ saving ? 'Kaydediliyor…' : 'Değişiklikleri kaydet' }}
         </button>
       </section>
     </main>
@@ -584,11 +640,38 @@ const removeAvatarPhoto = () => {
   padding: var(--spacing-1);
   cursor: pointer;
 }
-.avatar-save-row {
+.avatar-extra-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--spacing-3);
   margin-top: var(--spacing-2);
+}
+.settings-save-section {
+  position: sticky;
+  bottom: max(var(--spacing-4), env(safe-area-inset-bottom, 0px));
+  margin-bottom: 0;
+  padding-top: var(--spacing-5);
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.06);
+}
+.save-msg {
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+.save-msg--err {
+  color: var(--color-vermillion);
+}
+.save-msg--ok {
+  color: var(--secondary-color);
+}
+.save-msg--muted {
+  color: var(--text-color-muted);
+  font-weight: 400;
+}
+.btn-save-all {
+  width: 100%;
+  justify-content: center;
 }
 .profile-title {
   margin: 0;
